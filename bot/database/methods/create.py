@@ -1,10 +1,10 @@
-from datetime import datetime
+﻿from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import select, exists, func as sa_func, insert as sa_insert
 from sqlalchemy.exc import IntegrityError
 
-from bot.database.models import User, ItemValues, Goods, Categories, Payments, Role
+from bot.database.models import User, ItemValues, Goods, Categories, Payments, Role, ProductPrices
 from bot.database.models.main import PromoCodes, CartItems, Reviews, StockSubscriptions, promo_scope_for
 from bot.database import Database
 from bot.database.methods.cache_utils import safe_create_task
@@ -32,11 +32,11 @@ async def create_user(telegram_id: int, registration_date: datetime, referral_id
         try:
             await s.flush()
         except IntegrityError:
-            # Lost the race — the user now exists, which is the desired outcome.
+            # Lost the race â€” the user now exists, which is the desired outcome.
             await s.rollback()
 
 
-async def create_item(item_name: str, item_description: str, item_price: int, category_name: str) -> None:
+async def create_item(item_name: str, item_description: str, item_price: int, category_name: str, prices: dict | None = None) -> None:
     """Insert item (goods); commit. Resolves category_name to category_id."""
     async with Database().session() as s:
         result = await s.execute(select(exists().where(Goods.name == item_name)))
@@ -45,14 +45,25 @@ async def create_item(item_name: str, item_description: str, item_price: int, ca
         cat = (await s.execute(select(Categories.id).where(Categories.name == category_name))).scalar()
         if not cat:
             return
-        s.add(
-            Goods(
+        item = Goods(
                 name=item_name,
                 description=item_description,
                 price=item_price,
                 category_id=cat,
             )
-        )
+
+        s.add(item)
+        await s.flush()
+
+        if prices:
+            for currency, amount in prices.items():
+                s.add(
+                    ProductPrices(
+                        item_id=item.id,
+                        currency=currency,
+                        amount=amount,
+                    )
+                )
 
     safe_create_task(invalidate_stats_cache())
     # The category's cached item count changed.
@@ -328,7 +339,7 @@ async def subscribe_to_stock(user_id: int, item_name: str) -> tuple[bool, str]:
 
             s.add(StockSubscriptions(user_id=user_id, item_id=item_id))
     except IntegrityError:
-        # Lost the uq_stock_sub_per_user_item race — the subscription now exists, which is what the caller wanted anyway.
+        # Lost the uq_stock_sub_per_user_item race â€” the subscription now exists, which is what the caller wanted anyway.
         return True, "already_subscribed"
 
     return True, "subscribed"
@@ -361,3 +372,6 @@ async def create_review(user_id: int, item_name: str, rating: int, text: str = N
         s.add(review)
         await s.flush()
         return review.id
+
+
+

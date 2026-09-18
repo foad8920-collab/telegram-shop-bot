@@ -1,4 +1,4 @@
-from aiogram import Router, F
+﻿from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.enums.chat_type import ChatType
 from aiogram.fsm.context import FSMContext
@@ -40,6 +40,7 @@ async def _ensure_user(user_id: int) -> dict | None:
         registration_date=datetime.datetime.now(datetime.timezone.utc),
         referral_id=None,
         role=1,
+        language_code="ar",
     )
     await invalidate_user_cache(user_id)
     return await check_user_cached(user_id)
@@ -64,7 +65,7 @@ async def _delete_quietly(message: Message) -> None:
     """Delete a message, tolerating the cases Telegram refuses.
 
     A message older than 48h, or one in a chat where the bot lost delete rights,
-    raises — and that must not abort a handler that already did its real work.
+    raises â€” and that must not abort a handler that already did its real work.
     """
     try:
         await message.delete()
@@ -122,7 +123,8 @@ async def start(message: Message, state: FSMContext):
             telegram_id=int(user_id),
             registration_date=datetime.datetime.now(datetime.timezone.utc),
             referral_id=referral_id,
-            role=user_role
+            role=user_role,
+            language_code=message.from_user.language_code or "ar"
         )
 
         await invalidate_user_cache(user_id)
@@ -294,15 +296,20 @@ async def _show_operations_page(call: CallbackQuery, state: FSMContext, user_id:
     kb = InlineKeyboardBuilder()
     nav_buttons = []
     if page > 0:
-        nav_buttons.append(InlineKeyboardButton(text="◀️", callback_data=f"ops-page_{page - 1}"))
+        nav_buttons.append(InlineKeyboardButton(text="â—€ï¸ڈ", callback_data=f"ops-page_{page - 1}"))
     if total_pages > 1:
         nav_buttons.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="dummy_button"))
     if page < total_pages - 1:
-        nav_buttons.append(InlineKeyboardButton(text="▶️", callback_data=f"ops-page_{page + 1}"))
+        nav_buttons.append(InlineKeyboardButton(text="â–¶ï¸ڈ", callback_data=f"ops-page_{page + 1}"))
     if nav_buttons:
         kb.row(*nav_buttons)
     kb.row(InlineKeyboardButton(text=localize("btn.back"), callback_data="profile"))
 
     await call.message.edit_text("\n".join(lines), reply_markup=kb.as_markup())
+
+
+
+
+
 
 

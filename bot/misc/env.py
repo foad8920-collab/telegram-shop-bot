@@ -1,5 +1,8 @@
-import logging
+﻿import logging
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 from abc import ABC
 from typing import Final
 from urllib.parse import quote_plus
@@ -123,7 +126,7 @@ class EnvKeys(ABC):
         insecure = []
         if cls.SECRET_KEY == _DEFAULT_SECRET_KEY:
             insecure.append(
-                "SECRET_KEY is the shipped default — anyone who can reach the panel "
+                "SECRET_KEY is the shipped default â€” anyone who can reach the panel "
                 "can forge an admin session. Generate one with: "
                 'python -c "import secrets; print(secrets.token_hex(32))"'
             )
@@ -152,3 +155,6 @@ class EnvKeys(ABC):
                 "CONFIG: REFERRAL_PERCENT=%s is outside the valid range [0, 99].",
                 cls.REFERRAL_PERCENT,
             )
+
+
+

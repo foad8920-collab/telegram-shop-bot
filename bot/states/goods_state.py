@@ -1,4 +1,4 @@
-from aiogram.filters.state import StatesGroup, State
+﻿from aiogram.filters.state import StatesGroup, State
 
 
 class GoodsFSM(StatesGroup):
@@ -20,6 +20,9 @@ class AddItemFSM(StatesGroup):
     """
     waiting_item_name = State()
     waiting_item_description = State()
+    waiting_item_yer_price = State()
+    waiting_item_usd_price = State()
+    waiting_item_usdt_price = State()
     waiting_item_price = State()
     waiting_category = State()
     waiting_infinity = State()
@@ -41,6 +44,9 @@ class UpdateItemFSM(StatesGroup):
     waiting_item_name_for_update = State()
     waiting_item_new_name = State()
     waiting_item_description = State()
+    waiting_item_yer_price = State()
+    waiting_item_usd_price = State()
+    waiting_item_usdt_price = State()
     waiting_item_price = State()
     waiting_make_infinity = State()
     waiting_single_value = State()
@@ -57,4 +63,6 @@ class SaleFSM(StatesGroup):
     waiting_item_name = State()
     waiting_percent = State()
     waiting_days = State()
+
+
 

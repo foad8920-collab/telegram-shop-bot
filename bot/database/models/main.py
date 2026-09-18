@@ -1,4 +1,4 @@
-import datetime
+﻿import datetime
 from decimal import Decimal
 from typing import Optional
 
@@ -11,16 +11,16 @@ from bot.database.main import Database
 
 
 class Permission:
-    USE             = 1 << 0   #   1 — basic access
-    BROADCAST       = 1 << 1   #   2 — mass messaging
-    SETTINGS_MANAGE = 1 << 2   #   4 — bot settings (maintenance, etc.)
-    USERS_MANAGE    = 1 << 3   #   8 — view/block/unblock users, referrals, purchases
-    CATALOG_MANAGE  = 1 << 4   #  16 — categories, positions, items/goods CRUD
-    ADMINS_MANAGE   = 1 << 5   #  32 — role CRUD, role assignment
-    OWN             = 1 << 6   #  64 — owner-only operations
-    STATS_VIEW      = 1 << 7   # 128 — statistics, logs, bought-item search
-    BALANCE_MANAGE  = 1 << 8   # 256 — top-up / deduct user balance
-    PROMO_MANAGE    = 1 << 9   # 512 — promo code CRUD
+    USE             = 1 << 0   #   1 â€” basic access
+    BROADCAST       = 1 << 1   #   2 â€” mass messaging
+    SETTINGS_MANAGE = 1 << 2   #   4 â€” bot settings (maintenance, etc.)
+    USERS_MANAGE    = 1 << 3   #   8 â€” view/block/unblock users, referrals, purchases
+    CATALOG_MANAGE  = 1 << 4   #  16 â€” categories, positions, items/goods CRUD
+    ADMINS_MANAGE   = 1 << 5   #  32 â€” role CRUD, role assignment
+    OWN             = 1 << 6   #  64 â€” owner-only operations
+    STATS_VIEW      = 1 << 7   # 128 â€” statistics, logs, bought-item search
+    BALANCE_MANAGE  = 1 << 8   # 256 â€” top-up / deduct user balance
+    PROMO_MANAGE    = 1 << 9   # 512 â€” promo code CRUD
 
     @staticmethod
     def is_subset(perms: int, of: int) -> bool:
@@ -98,6 +98,7 @@ class User(Database.BASE):
     role_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey('roles.id', ondelete="RESTRICT"), default=1, index=True)
     balance: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    language_code: Mapped[str] = mapped_column(String(10), nullable=False, server_default="ar")
     referral_id: Mapped[Optional[int]] = mapped_column(
         BigInteger, ForeignKey('users.telegram_id', ondelete="SET NULL"), nullable=True, index=True)
     registration_date: Mapped[datetime.datetime] = mapped_column(
@@ -152,12 +153,50 @@ class Goods(Database.BASE):
     sale_percent: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), nullable=True)
     sale_until: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     category: Mapped["Categories"] = relationship("Categories", back_populates="items", lazy='raise')
-    values: Mapped[list["ItemValues"]] = relationship(
-        "ItemValues", back_populates="item", lazy='raise', passive_deletes=True)
+    values: Mapped[list["ItemValues"]] = relationship("ItemValues", back_populates="item", lazy='raise', passive_deletes=True)
+
+    prices: Mapped[list["ProductPrices"]] = relationship("ProductPrices", back_populates="item", lazy='raise', passive_deletes=True)
 
     def __str__(self):
         return self.name or ""
 
+
+
+class ProductPrices(Database.BASE):
+    __tablename__ = "product_prices"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    item_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("goods.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
+
+    currency: Mapped[str] = mapped_column(
+        String(8),
+        nullable=False
+    )
+
+    amount: Mapped[Decimal] = mapped_column(
+        Numeric(12,2),
+        nullable=False
+    )
+
+    item: Mapped["Goods"] = relationship(
+        "Goods",
+        back_populates="prices",
+        lazy="raise"
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "item_id",
+            "currency",
+            name="uq_product_price_currency"
+        ),
+    )
 
 class ItemValues(Database.BASE):
     __tablename__ = 'item_values'
@@ -400,7 +439,7 @@ class Reviews(Database.BASE):
     )
 
     def __str__(self):
-        return f"item {self.item_id} ({self.rating}★)"
+        return f"item {self.item_id} ({self.rating}âک…)"
 
 
 class StockSubscriptions(Database.BASE):
@@ -423,3 +462,6 @@ class StockSubscriptions(Database.BASE):
 async def register_models():
     """Seed the built-in roles (USER/ADMIN/OWNER)."""
     await Role.insert_roles()
+
+
+

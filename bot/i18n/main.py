@@ -1,10 +1,25 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 from functools import lru_cache
 from html import escape as _html_escape
 from typing import Any
 
 from bot.misc import EnvKeys
-from .strings import TRANSLATIONS, DEFAULT_LOCALE
+import json
+from pathlib import Path
+
+LANG_DIR = Path(__file__).parent / "languages"
+DEFAULT_LOCALE = "ar"
+
+
+def load_translations():
+    translations = {}
+    for file in LANG_DIR.glob("*.json"):
+        with open(file, encoding="utf-8") as f:
+            translations[file.stem] = json.load(f)
+    return translations
+
+
+TRANSLATIONS = load_translations()
 from bot.logger_mesh import logger
 
 
@@ -39,3 +54,4 @@ def localize(key: str, /, **kwargs: Any) -> str:
             logger.error(f"Failed to format translation key '{key}' with kwargs {kwargs}: {e}")
 
     return str(text)
+

@@ -1,4 +1,4 @@
-﻿from aiogram import Router, F
+from aiogram import Router, F
 from aiogram.exceptions import TelegramForbiddenError, TelegramNotFound, TelegramBadRequest
 from aiogram.types import CallbackQuery, Message
 
@@ -31,7 +31,7 @@ async def add_item_callback_handler(call: CallbackQuery, state):
 @router.message(AddItemFSM.waiting_item_name, F.text)
 async def check_item_name_for_add(message: Message, state):
     """
-    If position already exists â€” inform the user; otherwise save name and ask for description.
+    If position already exists — inform the user; otherwise save name and ask for description.
     """
     item_name = (message.text or "").strip()
     if not is_safe_item_name(item_name):
@@ -61,11 +61,11 @@ async def add_item_description(message: Message, state):
     await state.update_data(item_description=(message.text or "").strip())
     await message.answer(localize('admin.goods.add.prompt.price', currency=EnvKeys.PAY_CURRENCY),
                          reply_markup=back('goods_management'))
-    await state.set_state(AddItemFSM.waiting_item_yer_price)
+    await state.set_state(AddItemFSM.waiting_item_price)
 
 
-@router.message(AddItemFSM.waiting_item_yer_price, F.text)
-async def add_item_yer_price(message: Message, state):
+@router.message(AddItemFSM.waiting_item_price, F.text)
+async def add_item_price(message: Message, state):
     """
     Validate price and ask for category.
     """
@@ -79,54 +79,12 @@ async def add_item_yer_price(message: Message, state):
     await state.set_state(AddItemFSM.waiting_category)
 
 
-@router.message(AddItemFSM.waiting_item_usd_price, F.text)
-async def add_item_usd_price(message: Message, state):
-    """
-    Save USD price and ask for USDT price.
-    """
-    price = parse_price(message.text)
-    if price is None:
-        await message.answer(localize('admin.goods.add.price.invalid'), reply_markup=back('goods_management'))
-        return
-
-    data = await state.get_data()
-    prices = data.get("prices", {})
-    prices["USD"] = price
-
-    await state.update_data(prices=prices)
-
-    await message.answer("🪙 Enter item price (number in USDT):",
-                         reply_markup=back('goods_management'))
-    await state.set_state(AddItemFSM.waiting_item_usdt_price)
-
-
-@router.message(AddItemFSM.waiting_item_usdt_price, F.text)
-async def add_item_usdt_price(message: Message, state):
-    """
-    Save USDT price and continue to category.
-    """
-    price = parse_price(message.text)
-    if price is None:
-        await message.answer(localize('admin.goods.add.price.invalid'), reply_markup=back('goods_management'))
-        return
-
-    data = await state.get_data()
-    prices = data.get("prices", {})
-    prices["USDT"] = price
-
-    await state.update_data(prices=prices)
-
-    await message.answer(localize('admin.goods.add.prompt.category'),
-                         reply_markup=back('goods_management'))
-    await state.set_state(AddItemFSM.waiting_category)
-
 @router.message(AddItemFSM.waiting_category, F.text)
 async def check_category_for_add_item(message: Message, state):
     """
     Category must exist; then ask about infinite mode.
     """
     category_name = (message.text or "").strip()
-    print("DEBUG CATEGORY:", repr(category_name))
     category = await check_category_cached(category_name)
     if not category:
         await message.answer(
@@ -146,14 +104,14 @@ async def check_category_for_add_item(message: Message, state):
 @router.callback_query(F.data.startswith('infinity_'), AddItemFSM.waiting_infinity)
 async def adding_value_to_position(call: CallbackQuery, state):
     """
-    If infinite â€” wait for a single value.
-    If not â€” collect multiple values until completion.
+    If infinite — wait for a single value.
+    If not — collect multiple values until completion.
     """
     answer = call.data.split('_')[1]
     await state.update_data(is_infinity=(answer == 'yes'))
 
     if answer == 'no':
-        # â€œFinish addingâ€‌ button will appear after the first value is provided
+        # “Finish adding” button will appear after the first value is provided
         await call.message.edit_text(
             localize('admin.goods.add.values.prompt_multi'),
             reply_markup=back("goods_management")
@@ -170,7 +128,7 @@ async def adding_value_to_position(call: CallbackQuery, state):
 @router.message(AddItemFSM.waiting_values, F.text)
 async def collect_item_value(message: Message, state):
     """
-    Accumulate values in FSM state. After the first one â€” show a â€œFinish addingâ€‌ button.
+    Accumulate values in FSM state. After the first one — show a “Finish adding” button.
     """
     data = await state.get_data()
     values = data.get('item_values', [])
@@ -178,7 +136,7 @@ async def collect_item_value(message: Message, state):
     values.append(value)
     await state.update_data(item_values=values)
 
-    # Show progress + â€œFinish addingâ€‌ button
+    # Show progress + “Finish adding” button
     await message.answer(
         localize('admin.goods.add.values.added', value=esc(value), count=len(values)),
         reply_markup=simple_buttons([
@@ -201,7 +159,7 @@ async def finish_adding_items_callback_handler(call: CallbackQuery, state):
     raw_values: list[str] = data.get("item_values", []) or []
 
     # Create position
-    await create_item(item_name, item_description, item_price, category_name, data.get('prices', {}))
+    await create_item(item_name, item_description, item_price, category_name)
 
     added, skipped_db_dup, skipped_batch_dup, skipped_invalid = await add_values_bulk(
         item_name, raw_values, is_infinity=False
@@ -231,9 +189,9 @@ async def finish_adding_items_callback_handler(call: CallbackQuery, state):
             await call.bot.send_message(
                 chat_id=chat_id,
                 text=(
-                    f"ًںژپ {localize('shop.group.new_upload')}\n"
-                    f"ًںڈ·ï¸ڈ {localize('shop.group.item')}: <b>{esc(item_name)}</b>\n"
-                    f"ًں“¦ {localize('shop.group.count')}: <b>{added}</b>"
+                    f"🎁 {localize('shop.group.new_upload')}\n"
+                    f"🏷️ {localize('shop.group.item')}: <b>{esc(item_name)}</b>\n"
+                    f"📦 {localize('shop.group.count')}: <b>{added}</b>"
                 ),
                 parse_mode='HTML'
             )
@@ -254,7 +212,7 @@ async def finish_adding_items_callback_handler(call: CallbackQuery, state):
 @router.message(AddItemFSM.waiting_single_value, F.text)
 async def finish_adding_item_callback_handler(message: Message, state):
     """
-    Create a position and add one â€œinfiniteâ€‌ value. Notify group (if configured).
+    Create a position and add one “infinite” value. Notify group (if configured).
     """
     data = await state.get_data()
     item_name = data.get('item_name')
@@ -268,11 +226,11 @@ async def finish_adding_item_callback_handler(message: Message, state):
         return
 
     # 1) Create position
-    await create_item(item_name, item_description, item_price, category_name, data.get('prices', {}))
-    # 2) Add 1 â€œinfiniteâ€‌ value
+    await create_item(item_name, item_description, item_price, category_name)
+    # 2) Add 1 “infinite” value
     added = await add_values_to_item(item_name, single_value, True)
 
-    # 3) Stock is committed â€” notify anyone waiting on this position.
+    # 3) Stock is committed — notify anyone waiting on this position.
     if added:
         await _notify_restock_safe(message.bot, item_name)
 
@@ -284,9 +242,9 @@ async def finish_adding_item_callback_handler(message: Message, state):
             await message.bot.send_message(
                 chat_id=chat_id,
                 text=(
-                    f"ًںژپ {localize('shop.group.new_upload')}\n"
-                    f"ًںڈ·ï¸ڈ {localize('shop.group.item')}: <b>{esc(item_name)}</b>\n"
-                    f"ًں“¦ {localize('shop.group.count')}: <b>âˆ‍</b>"
+                    f"🎁 {localize('shop.group.new_upload')}\n"
+                    f"🏷️ {localize('shop.group.item')}: <b>{esc(item_name)}</b>\n"
+                    f"📦 {localize('shop.group.count')}: <b>∞</b>"
                 ),
                 parse_mode='HTML'
             )
@@ -303,9 +261,3 @@ async def finish_adding_item_callback_handler(message: Message, state):
                     details=f"admin={admin_name}, infinite=true")
 
     await state.clear()
-
-
-
-
-
-
