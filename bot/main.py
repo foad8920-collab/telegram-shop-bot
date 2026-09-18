@@ -19,7 +19,7 @@ from bot.misc import EnvKeys
 from bot.handlers import register_all_handlers
 from bot.database.models import register_models
 from bot.logger_mesh import configure_logging
-from bot.middleware import setup_rate_limiting, RateLimitConfig
+from bot.middleware import setup_rate_limiting, RateLimitConfig, I18nMiddleware
 from bot.middleware.security import SecurityMiddleware, AuthenticationMiddleware, set_auth_middleware
 from bot.misc.caching import init_cache_manager, get_cache_manager
 from bot.misc.caching import CacheScheduler
@@ -57,11 +57,15 @@ def _setup_rate_limiting(dp: Dispatcher, auth_middleware: AuthenticationMiddlewa
 
 def _register_middlewares(
         dp: Dispatcher,
+        i18n_middleware: I18nMiddleware,
         analytics_middleware: AnalyticsMiddleware,
         auth_middleware: AuthenticationMiddleware,
         security_middleware: SecurityMiddleware,
 ) -> None:
     """Register non-rate-limit middlewares."""
+    dp.message.middleware(i18n_middleware)
+    dp.callback_query.middleware(i18n_middleware)
+
     dp.message.middleware(analytics_middleware)
     dp.callback_query.middleware(analytics_middleware)
 
@@ -71,7 +75,7 @@ def _register_middlewares(
     dp.message.middleware(security_middleware)
     dp.callback_query.middleware(security_middleware)
 
-    logging.info("Security middleware initialized")
+    logging.info("Security and i18n middlewares initialized")
 
 
 async def _setup_caching(storage) -> Optional[CacheScheduler]:
@@ -138,8 +142,9 @@ async def _startup(dp: Dispatcher, bot: Bot, ctx: AppContext, storage) -> None:
     # Metrics + analytics middleware
     metrics = init_metrics()
     analytics_middleware = AnalyticsMiddleware(metrics)
+    i18n_middleware = I18nMiddleware()
 
-    _register_middlewares(dp, analytics_middleware, auth_middleware, security_middleware)
+    _register_middlewares(dp, i18n_middleware, analytics_middleware, auth_middleware, security_middleware)
 
     # Batch audit
     await start_audit_buffer()

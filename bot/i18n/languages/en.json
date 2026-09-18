@@ -406,5 +406,12 @@
   "errors.channel.telegram_bad_request": "Failed to send to the channel for uploads: {e}",
   "errors.general_error": "❌ Error: {e}",
   "errors.invalid_item_name": "❌ Invalid item name",
-  "errors.invalid_user": "❌ Invalid user"
+  "errors.invalid_user": "❌ Invalid user",
+  "btn.language": "🌐 Language",
+  "language.select": "🌐 <b>Select bot language:</b>\nPlease choose your preferred language from the options below.",
+  "language.changed": "✅ Bot language has been changed to English successfully!",
+  "lang.ar": "🇸🇦 العربية",
+  "lang.en": "🇬🇧 English",
+  "lang.ru": "🇷🇺 Русский",
+  "admin.goods.add.prompt.usdt_price": "🪙 Enter item price (number in USDT):"
 }

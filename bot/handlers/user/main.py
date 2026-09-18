@@ -1,4 +1,4 @@
-﻿from aiogram import Router, F
+from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.enums.chat_type import ChatType
 from aiogram.fsm.context import FSMContext
@@ -10,21 +10,22 @@ from html import escape as _esc
 
 from bot.database.methods import (
     select_max_role_id, create_user, check_role_cached, check_user,
-    select_user_operations_total, select_user_items, check_user_cached
+    select_user_operations_total, select_user_items, check_user_cached,
+    set_user_language
 )
 from bot.database.methods.read import get_cart_count, invalidate_user_cache
 from bot.database.methods.lazy_queries import query_user_operations_history
 from bot.handlers.other import check_sub_channel, _parse_channel_username
-from bot.keyboards import main_menu, back, profile_keyboard, check_sub
+from bot.keyboards import main_menu, back, profile_keyboard, check_sub, language_menu
 from bot.misc import EnvKeys
 from bot.misc.metrics import get_metrics
-from bot.i18n import localize
+from bot.i18n import localize, set_current_locale, set_user_cache_locale, SUPPORTED_LOCALES
 from bot.logger_mesh import logger
 
 router = Router()
 
 
-async def _ensure_user(user_id: int) -> dict | None:
+async def _ensure_user(user_id: int, tg_lang: str | None = None) -> dict | None:
     """Return the user's row, registering them first if it is missing.
 
     A stale keyboard (or a wiped database) can hand a callback from someone
@@ -35,14 +36,19 @@ async def _ensure_user(user_id: int) -> dict | None:
     if user:
         return user
 
+    raw_lang = (tg_lang or "").lower()[:2]
+    user_lang = raw_lang if raw_lang in SUPPORTED_LOCALES else "ar"
+
     await create_user(
         telegram_id=user_id,
         registration_date=datetime.datetime.now(datetime.timezone.utc),
         referral_id=None,
         role=1,
-        language_code="ar",
+        language_code=user_lang,
     )
     await invalidate_user_cache(user_id)
+    set_user_cache_locale(user_id, user_lang)
+    set_current_locale(user_lang)
     return await check_user_cached(user_id)
 
 
@@ -119,15 +125,20 @@ async def start(message: Message, state: FSMContext):
                     referral_id = candidate
 
         # registration_date is DateTime
+        raw_lang = (message.from_user.language_code or "").lower()[:2]
+        user_lang = raw_lang if raw_lang in SUPPORTED_LOCALES else "ar"
+
         await create_user(
             telegram_id=int(user_id),
             registration_date=datetime.datetime.now(datetime.timezone.utc),
             referral_id=referral_id,
             role=user_role,
-            language_code=message.from_user.language_code or "ar"
+            language_code=user_lang,
         )
 
         await invalidate_user_cache(user_id)
+        set_user_cache_locale(user_id, user_lang)
+        set_current_locale(user_lang)
         from bot.middleware.security import invalidate_auth_caches
         invalidate_auth_caches(user_id)
 
@@ -166,6 +177,40 @@ async def back_to_menu_callback_handler(call: CallbackQuery, state: FSMContext):
 
     channel_username = _parse_channel_username()
 
+    markup = main_menu(role=role, channel=channel_username, helper=EnvKeys.HELPER_ID)
+    await call.message.edit_text(localize("menu.title"), reply_markup=markup)
+    await state.clear()
+
+
+@router.callback_query(F.data == "choose_language")
+async def choose_language_callback_handler(call: CallbackQuery, state: FSMContext):
+    """
+    Show language selection options (ar, en, ru).
+    """
+    user_id = call.from_user.id
+    await _ensure_user(user_id, tg_lang=call.from_user.language_code)
+    await call.message.edit_text(localize("language.select"), reply_markup=language_menu(), parse_mode="HTML")
+    await state.clear()
+
+
+@router.callback_query(F.data.startswith("set_lang:"))
+async def set_language_callback_handler(call: CallbackQuery, state: FSMContext):
+    """
+    Save chosen language and immediately re-render in the new language.
+    """
+    user_id = call.from_user.id
+    lang = call.data.split(":")[1].strip().lower()
+    if lang not in SUPPORTED_LOCALES:
+        lang = "ar"
+
+    await set_user_language(user_id, lang)
+    set_user_cache_locale(user_id, lang)
+    set_current_locale(lang)
+
+    await call.answer(localize("language.changed"))
+
+    role = await check_role_cached(user_id) or 0
+    channel_username = _parse_channel_username()
     markup = main_menu(role=role, channel=channel_username, helper=EnvKeys.HELPER_ID)
     await call.message.edit_text(localize("menu.title"), reply_markup=markup)
     await state.clear()
@@ -296,11 +341,11 @@ async def _show_operations_page(call: CallbackQuery, state: FSMContext, user_id:
     kb = InlineKeyboardBuilder()
     nav_buttons = []
     if page > 0:
-        nav_buttons.append(InlineKeyboardButton(text="â—€ï¸ڈ", callback_data=f"ops-page_{page - 1}"))
+        nav_buttons.append(InlineKeyboardButton(text="◀️", callback_data=f"ops-page_{page - 1}"))
     if total_pages > 1:
         nav_buttons.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="dummy_button"))
     if page < total_pages - 1:
-        nav_buttons.append(InlineKeyboardButton(text="â–¶ï¸ڈ", callback_data=f"ops-page_{page + 1}"))
+        nav_buttons.append(InlineKeyboardButton(text="▶️", callback_data=f"ops-page_{page + 1}"))
     if nav_buttons:
         kb.row(*nav_buttons)
     kb.row(InlineKeyboardButton(text=localize("btn.back"), callback_data="profile"))

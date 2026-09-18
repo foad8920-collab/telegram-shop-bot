@@ -8,44 +8,87 @@ from bot.misc import LazyPaginator # noqa: F401
 
 def main_menu(role: int, channel: str | None = None, helper: str | None = None) -> InlineKeyboardMarkup:
     """
-    Main menu.
+    Main menu: modern 2-column mobile-friendly layout.
     """
     kb = InlineKeyboardBuilder()
-    kb.button(text=localize("btn.shop"), callback_data="shop")
-    kb.button(text=localize("btn.rules"), callback_data="rules")
-    kb.button(text=localize("btn.profile"), callback_data="profile")
+    # Row 1: Shop & Search
+    kb.row(
+        InlineKeyboardButton(text=localize("btn.shop"), callback_data="shop"),
+        InlineKeyboardButton(text=localize("btn.search"), callback_data="shop_search"),
+    )
+    # Row 2: Profile & Rules
+    kb.row(
+        InlineKeyboardButton(text=localize("btn.profile"), callback_data="profile"),
+        InlineKeyboardButton(text=localize("btn.rules"), callback_data="rules"),
+    )
+    # Row 3: Support & Language
+    row3 = []
     if helper:
-        kb.button(text=localize("btn.support"), url=f"tg://user?id={helper}")
+        row3.append(InlineKeyboardButton(text=localize("btn.support"), url=f"tg://user?id={helper}"))
+    row3.append(InlineKeyboardButton(text=localize("btn.language"), callback_data="choose_language"))
+    kb.row(*row3)
+
+    # Row 4: Channel & Admin (if available)
+    extra_row = []
     if channel:
-        kb.button(text=localize("btn.channel"), url=f"https://t.me/{channel.lstrip('@')}")
+        extra_row.append(InlineKeyboardButton(text=localize("btn.channel"), url=f"https://t.me/{channel.lstrip('@')}"))
     if Permission.has_any_admin_perm(role):
-        kb.button(text=localize("btn.admin_menu"), callback_data="console")
-    kb.adjust(2)
+        extra_row.append(InlineKeyboardButton(text=localize("btn.admin_menu"), callback_data="console"))
+    if extra_row:
+        kb.row(*extra_row)
+
+    return kb.as_markup()
+
+
+def language_menu() -> InlineKeyboardMarkup:
+    """
+    Language selection menu.
+    """
+    kb = InlineKeyboardBuilder()
+    kb.row(
+        InlineKeyboardButton(text="🇸🇦 العربية", callback_data="set_lang:ar"),
+        InlineKeyboardButton(text="🇬🇧 English", callback_data="set_lang:en"),
+    )
+    kb.row(
+        InlineKeyboardButton(text="🇷🇺 Русский", callback_data="set_lang:ru"),
+        InlineKeyboardButton(text=localize("btn.back"), callback_data="back_to_menu"),
+    )
     return kb.as_markup()
 
 
 def profile_keyboard(referral_percent: int, user_items: int = 0, cart_count: int = 0) -> InlineKeyboardMarkup:
     """
-    Profile keyboard with cart, history, subscriptions.
+    Profile keyboard: balanced 2-column layout.
     """
     kb = InlineKeyboardBuilder()
-    kb.button(text=localize("btn.replenish"), callback_data="replenish_balance")
-    if referral_percent != 0:
-        kb.button(text=localize("btn.referral"), callback_data="referral_system")
-    if user_items != 0:
-        kb.button(text=localize("btn.purchased"), callback_data="bought_items")
     cart_text = localize("btn.cart", count=cart_count) if cart_count > 0 else localize("btn.cart_empty")
-    kb.button(text=cart_text, callback_data="cart")
-    kb.button(text=localize("btn.operation_history"), callback_data="operation_history")
-    kb.button(text=localize("btn.redeem_promo"), callback_data="redeem_promo")
-    kb.button(text=localize("btn.back"), callback_data="back_to_menu")
-    kb.adjust(1)
+    # Row 1: Balance & Cart
+    kb.row(
+        InlineKeyboardButton(text=localize("btn.replenish"), callback_data="replenish_balance"),
+        InlineKeyboardButton(text=cart_text, callback_data="cart"),
+    )
+    # Row 2: Referrals & Purchases
+    mid_row = []
+    if referral_percent != 0:
+        mid_row.append(InlineKeyboardButton(text=localize("btn.referral"), callback_data="referral_system"))
+    if user_items != 0:
+        mid_row.append(InlineKeyboardButton(text=localize("btn.purchased"), callback_data="bought_items"))
+    if mid_row:
+        kb.row(*mid_row)
+
+    # Row 3: History & Promo
+    kb.row(
+        InlineKeyboardButton(text=localize("btn.operation_history"), callback_data="operation_history"),
+        InlineKeyboardButton(text=localize("btn.redeem_promo"), callback_data="redeem_promo"),
+    )
+    # Row 4: Back
+    kb.row(InlineKeyboardButton(text=localize("btn.back"), callback_data="back_to_menu"))
     return kb.as_markup()
 
 
 def admin_console_keyboard(maintenance_mode: bool = False, role: int = 127) -> InlineKeyboardMarkup:
     """
-    Admin panel — shows only buttons the user has permissions for.
+    Admin panel — shows only buttons the user has permissions for, in a 2-column layout.
     """
     kb = InlineKeyboardBuilder()
     if role & Permission.CATALOG_MANAGE:
@@ -63,19 +106,36 @@ def admin_console_keyboard(maintenance_mode: bool = False, role: int = 127) -> I
     if role & Permission.SETTINGS_MANAGE:
         maintenance_key = "admin.menu.maintenance_on" if maintenance_mode else "admin.menu.maintenance_off"
         kb.button(text=localize(maintenance_key), callback_data="toggle_maintenance")
-    kb.button(text=localize("btn.back"), callback_data="back_to_menu")
-    kb.adjust(1)
+    kb.adjust(2)
+    kb.row(InlineKeyboardButton(text=localize("btn.back"), callback_data="back_to_menu"))
     return kb.as_markup()
 
 
-def simple_buttons(buttons: Iterable[Tuple[str, str]], per_row: int = 1) -> InlineKeyboardMarkup:
+def simple_buttons(buttons: Iterable[Tuple[str, str]], per_row: int = 2) -> InlineKeyboardMarkup:
     """
-    Universal button assembly from (text, callback_data)
+    Universal button assembly from (text, callback_data) with clean 2-column layout.
     """
+    btn_list = list(buttons)
+    if not btn_list:
+        return InlineKeyboardMarkup(inline_keyboard=[])
+
+    last_text, last_cb = btn_list[-1]
+    is_back = (
+        last_cb in ("console", "back_to_menu", "profile", "goods_management", "shop_management", "user_management", "replenish_balance", "shop")
+        or "back" in last_cb.lower()
+    )
+
     kb = InlineKeyboardBuilder()
-    for text, cb in buttons:
-        kb.button(text=text, callback_data=cb)
-    kb.adjust(per_row)
+    if is_back and len(btn_list) > 1 and len(btn_list) % 2 == 0:
+        for text, cb in btn_list[:-1]:
+            kb.button(text=text, callback_data=cb)
+        kb.adjust(per_row)
+        kb.row(InlineKeyboardButton(text=last_text, callback_data=last_cb))
+    else:
+        for text, cb in btn_list:
+            kb.button(text=text, callback_data=cb)
+        kb.adjust(per_row)
+
     return kb.as_markup()
 
 
@@ -173,8 +233,7 @@ def item_info(
 
 def cart_keyboard(items: list[dict]) -> InlineKeyboardMarkup:
     """
-    Cart view: a quantity stepper, an optional promo-drop button, and a remove
-    button per line.
+    Cart view: quantity stepper per item and 2-column actions at the bottom.
     """
     kb = InlineKeyboardBuilder()
     for item in items:
@@ -195,8 +254,10 @@ def cart_keyboard(items: list[dict]) -> InlineKeyboardMarkup:
             text=localize("btn.cart_remove_item", name=item['item_name']),
             callback_data=f"cart_remove:{item['id']}",
         ))
-    kb.row(InlineKeyboardButton(text=localize("btn.cart_checkout"), callback_data="cart_checkout"))
-    kb.row(InlineKeyboardButton(text=localize("btn.cart_clear"), callback_data="cart_clear"))
+    kb.row(
+        InlineKeyboardButton(text=localize("btn.cart_checkout"), callback_data="cart_checkout"),
+        InlineKeyboardButton(text=localize("btn.cart_clear"), callback_data="cart_clear"),
+    )
     kb.row(InlineKeyboardButton(text=localize("btn.back"), callback_data="profile"))
     return kb.as_markup()
 
@@ -206,26 +267,28 @@ def payment_menu(pay_url: str) -> InlineKeyboardMarkup:
     Buttons under the invoice (CryptoPay, etc.).
     """
     kb = InlineKeyboardBuilder()
-    kb.button(text=localize("btn.pay"), url=pay_url)
-    kb.button(text=localize("btn.check_payment"), callback_data="check")
-    kb.button(text=localize("btn.back"), callback_data="profile")
-    kb.adjust(1)
+    kb.row(InlineKeyboardButton(text=localize("btn.pay"), url=pay_url))
+    kb.row(
+        InlineKeyboardButton(text=localize("btn.check_payment"), callback_data="check"),
+        InlineKeyboardButton(text=localize("btn.back"), callback_data="profile"),
+    )
     return kb.as_markup()
 
 
 def get_payment_choice() -> InlineKeyboardMarkup:
     """
-    Select a payment method.
+    Select a payment method in a 2-column grid.
     """
-    return simple_buttons(
-        [
-            (localize("btn.pay.crypto"), "pay_cryptopay"),
-            (localize("btn.pay.stars"), "pay_stars"),
-            (localize("btn.pay.tg"), "pay_fiat"),
-            (localize("btn.back"), "replenish_balance"),
-        ],
-        per_row=1,
+    kb = InlineKeyboardBuilder()
+    kb.row(
+        InlineKeyboardButton(text=localize("btn.pay.crypto"), callback_data="pay_cryptopay"),
+        InlineKeyboardButton(text=localize("btn.pay.stars"), callback_data="pay_stars"),
     )
+    kb.row(
+        InlineKeyboardButton(text=localize("btn.pay.tg"), callback_data="pay_fiat"),
+        InlineKeyboardButton(text=localize("btn.back"), callback_data="replenish_balance"),
+    )
+    return kb.as_markup()
 
 
 def question_buttons(question: str, back_data: str) -> InlineKeyboardMarkup:
@@ -245,9 +308,10 @@ def check_sub(channel_username: str) -> InlineKeyboardMarkup:
     checks the channel subscription.
     """
     kb = InlineKeyboardBuilder()
-    kb.button(text=localize("btn.channel"), url=f"https://t.me/{channel_username}")
-    kb.button(text=localize("btn.check_subscription"), callback_data="sub_channel_done")
-    kb.adjust(1)
+    kb.row(
+        InlineKeyboardButton(text=localize("btn.channel"), url=f"https://t.me/{channel_username}"),
+        InlineKeyboardButton(text=localize("btn.check_subscription"), callback_data="sub_channel_done"),
+    )
     return kb.as_markup()
 
 
@@ -263,16 +327,15 @@ def rating_keyboard() -> InlineKeyboardMarkup:
 
 def referral_system_keyboard(has_referrals: bool = False, has_earnings: bool = False) -> InlineKeyboardMarkup:
     """
-    Referral system keyboard with additional buttons.
+    Referral system keyboard with 2-column buttons.
     """
     kb = InlineKeyboardBuilder()
-
+    action_buttons = []
     if has_referrals:
-        kb.button(text=localize("btn.view_referrals"), callback_data="view_referrals")
-
+        action_buttons.append(InlineKeyboardButton(text=localize("btn.view_referrals"), callback_data="view_referrals"))
     if has_earnings:
-        kb.button(text=localize("btn.view_earnings"), callback_data="view_all_earnings")
-
-    kb.button(text=localize("btn.back"), callback_data="profile")
-    kb.adjust(1)
+        action_buttons.append(InlineKeyboardButton(text=localize("btn.view_earnings"), callback_data="view_all_earnings"))
+    if action_buttons:
+        kb.row(*action_buttons)
+    kb.row(InlineKeyboardButton(text=localize("btn.back"), callback_data="profile"))
     return kb.as_markup()

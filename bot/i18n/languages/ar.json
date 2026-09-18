@@ -406,5 +406,12 @@
   "errors.channel.telegram_bad_request": "فشل الإرسال إلى قناة الرفع: {e}",
   "errors.general_error": "❌ خطأ: {e}",
   "errors.invalid_item_name": "❌ اسم المنتج غير صالح",
-  "errors.invalid_user": "❌ مستخدم غير صالح"
+  "errors.invalid_user": "❌ مستخدم غير صالح",
+  "btn.language": "🌐 اللغة",
+  "language.select": "🌐 <b>اختر لغة البوت:</b>\nيرجى تحديد لغتك المفضلة من الخيارات أدناه.",
+  "language.changed": "✅ تم تغيير لغة البوت إلى العربية بنجاح!",
+  "lang.ar": "🇸🇦 العربية",
+  "lang.en": "🇬🇧 English",
+  "lang.ru": "🇷🇺 Русский",
+  "admin.goods.add.prompt.usdt_price": "🪙 أدخل سعر المنتج (الرقم بعملة USDT):"
 }

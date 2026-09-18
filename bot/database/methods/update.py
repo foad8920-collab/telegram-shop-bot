@@ -20,6 +20,16 @@ async def set_role(telegram_id: int, role: int) -> None:
     safe_create_task(invalidate_user_cache(telegram_id))
 
 
+async def set_user_language(telegram_id: int, language_code: str) -> None:
+    """Set user's language preference (by Telegram ID) and commit."""
+    async with Database().session() as s:
+        await s.execute(
+            update(User).where(User.telegram_id == telegram_id).values(language_code=language_code)
+        )
+
+    safe_create_task(invalidate_user_cache(telegram_id))
+
+
 async def update_item(item_name: str, new_name: str, description: str, price, category: str) -> tuple[bool, str | None]:
     """Update a Goods record with proper locking.
 

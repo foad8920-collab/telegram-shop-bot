@@ -1,4 +1,4 @@
-﻿from datetime import datetime
+from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import select, exists, func as sa_func, insert as sa_insert
@@ -15,7 +15,13 @@ CART_MAX_ITEMS = 10
 CART_MAX_QTY_PER_ITEM = 99
 
 
-async def create_user(telegram_id: int, registration_date: datetime, referral_id: int | None, role: int = 1) -> None:
+async def create_user(
+    telegram_id: int,
+    registration_date: datetime,
+    referral_id: int | None,
+    role: int = 1,
+    language_code: str = "ar",
+) -> None:
     """Create user if missing; commit."""
     async with Database().session() as s:
         result = await s.execute(select(exists().where(User.telegram_id == telegram_id)))
@@ -27,12 +33,13 @@ async def create_user(telegram_id: int, registration_date: datetime, referral_id
                 role_id=role,
                 registration_date=registration_date,
                 referral_id=referral_id,
+                language_code=language_code or "ar",
             )
         )
         try:
             await s.flush()
         except IntegrityError:
-            # Lost the race â€” the user now exists, which is the desired outcome.
+            # Lost the race — the user now exists, which is the desired outcome.
             await s.rollback()
 
 

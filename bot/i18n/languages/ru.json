@@ -406,5 +406,12 @@
   "errors.channel.telegram_bad_request": "Не удалось отправить в канал для заливов: {e}",
   "errors.general_error": "❌ Ошибка: {e}",
   "errors.invalid_item_name": "❌ Некорректное название товара",
-  "errors.invalid_user": "❌ Некорректный пользователь"
+  "errors.invalid_user": "❌ Некорректный пользователь",
+  "btn.language": "🌐 Язык",
+  "language.select": "🌐 <b>Выберите язык бота:</b>\nПожалуйста, выберите предпочтительный язык из предложенных вариантов.",
+  "language.changed": "✅ Язык бота успешно изменен на русский!",
+  "lang.ar": "🇸🇦 العربية",
+  "lang.en": "🇬🇧 English",
+  "lang.ru": "🇷🇺 Русский",
+  "admin.goods.add.prompt.usdt_price": "🪙 Введите цену товара (число в USDT):"
 }

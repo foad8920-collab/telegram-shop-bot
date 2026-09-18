@@ -1,4 +1,4 @@
-DEFAULT_LOCALE = "ru"
+DEFAULT_LOCALE = "ar"
 
 TRANSLATIONS: dict[str, dict[str, str]] = {
     "ru": {

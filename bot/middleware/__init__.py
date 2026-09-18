@@ -4,3 +4,5 @@ from bot.middleware.rate_limit import (
     RateLimiter,
     setup_rate_limiting
 )
+from bot.middleware.i18n import I18nMiddleware
+
