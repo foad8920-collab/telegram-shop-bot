@@ -18,8 +18,8 @@ def main_menu(role: int, channel: str | None = None, helper: str | None = None) 
         InlineKeyboardButton(text=localize("btn.search"), callback_data="shop_search", style="primary"),
     )
     kb.row(
-        InlineKeyboardButton(text=localize("btn.profile"), callback_data="profile"),
-        InlineKeyboardButton(text=localize("btn.rules"), callback_data="rules"),
+        InlineKeyboardButton(text=localize("btn.profile"), callback_data="profile", style="primary"),
+        InlineKeyboardButton(text=localize("btn.rules"), callback_data="rules", style="primary"),
     )
     kb.row(InlineKeyboardButton(text=localize("btn.subscription_store"), callback_data="sv_store"))
 
