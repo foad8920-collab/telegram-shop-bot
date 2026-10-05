@@ -21,7 +21,7 @@ def main_menu(role: int, channel: str | None = None, helper: str | None = None) 
         InlineKeyboardButton(text=localize("btn.profile"), callback_data="profile", style="primary"),
         InlineKeyboardButton(text=localize("btn.rules"), callback_data="rules", style="primary"),
     )
-    kb.row(InlineKeyboardButton(text=localize("btn.subscription_store"), callback_data="sv_store"))
+    kb.row(InlineKeyboardButton(text=localize("btn.subscription_store"), callback_data="sv_store", style="primary"))
 
     row3 = []
     if helper:
