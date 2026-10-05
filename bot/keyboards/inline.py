@@ -15,7 +15,7 @@ def main_menu(role: int, channel: str | None = None, helper: str | None = None) 
     # Pair related actions to keep the menu compact without overcrowding buttons.
     kb.row(
         InlineKeyboardButton(text=localize("btn.shop"), callback_data="shop", style="primary"),
-        InlineKeyboardButton(text=localize("btn.search"), callback_data="shop_search"),
+        InlineKeyboardButton(text=localize("btn.search"), callback_data="shop_search", style="primary"),
     )
     kb.row(
         InlineKeyboardButton(text=localize("btn.profile"), callback_data="profile"),
