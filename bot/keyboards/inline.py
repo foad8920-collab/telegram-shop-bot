@@ -31,9 +31,9 @@ def main_menu(role: int, channel: str | None = None, helper: str | None = None) 
 
     extra_row = []
     if channel:
-        extra_row.append(InlineKeyboardButton(text=localize("btn.channel"), url=f"https://t.me/{channel.lstrip('@')}"))
+        extra_row.append(InlineKeyboardButton(text=localize("btn.channel"), url=f"https://t.me/{channel.lstrip('@')}", style="primary"))
     if Permission.has_any_admin_perm(role):
-        extra_row.append(InlineKeyboardButton(text=localize("btn.admin_menu"), callback_data="console"))
+        extra_row.append(InlineKeyboardButton(text=localize("btn.admin_menu"), callback_data="console", style="primary"))
     if extra_row:
         kb.row(*extra_row)
 
