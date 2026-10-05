@@ -53,7 +53,13 @@ async def query_items_in_category(category_name: str, offset: int = 0, limit: in
         return 0 if count_only else []
     cat_id = cat['id']
 
-    query = select(Goods.name).where(Goods.category_id == cat_id)
+    query = select(Goods.name).where(
+        Goods.category_id == cat_id,
+        or_(
+            Goods.stackvault_product_id.is_(None),
+            (Goods.stackvault_product_id.is_not(None) & (Goods.stackvault_enabled == True)),
+        ),
+    )
     if count_only:
         async def _count():
             async with Database().session() as s:
@@ -89,7 +95,11 @@ async def query_goods_search(query: str, offset: int = 0, limit: int = 10,
             or_(
                 Goods.name.ilike(pattern, escape='\\'),
                 Goods.description.ilike(pattern, escape='\\'),
-            )
+            ),
+            or_(
+                Goods.stackvault_product_id.is_(None),
+                (Goods.stackvault_product_id.is_not(None) & (Goods.stackvault_enabled == True)),
+            ),
         )
         if count_only:
             count_result = await s.execute(select(func.count()).select_from(base.subquery()))

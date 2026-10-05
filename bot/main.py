@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from aiogram import Bot, Dispatcher
+from aiogram.types import BotCommand, MenuButtonCommands
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.storage.redis import RedisStorage
@@ -392,6 +393,12 @@ async def start_bot() -> None:
                 protect_content=False,
             ),
     ) as bot:
+        # Configure Telegram's commands menu before any polling/webhook startup.
+        await bot.set_my_commands([
+            BotCommand(command="start", description="Start the bot"),
+        ])
+        await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+
         bot_info = await bot.get_me()
         logging.info(f"Starting bot: @{bot_info.username} (ID: {bot_info.id})")
 

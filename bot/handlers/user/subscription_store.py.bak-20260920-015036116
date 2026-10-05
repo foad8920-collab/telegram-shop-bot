@@ -1,0 +1,121 @@
+"""Read-only StackVault subscription store for bot users."""
+
+from __future__ import annotations
+
+from html import escape
+
+from aiogram import F, Router
+from aiogram.fsm.context import FSMContext
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup
+
+from bot.i18n import localize
+from bot.keyboards.inline import subscription_product_keyboard, subscription_store_keyboard as _catalog_keyboard
+from bot.misc.services import StackVaultAPIError, StackVaultClient
+from bot.misc.services.stackvault_pricing import prepare_catalog, is_available as _has_stock
+
+router = Router()
+
+PRODUCTS_PER_PAGE = 10
+_PAGE_PRODUCTS_KEY = "stackvault_page_products"
+
+
+def is_available(product: dict) -> bool:
+    """Display availability only when both supplier signals agree."""
+    return product.get("in_stock") is True and _has_stock(product)
+
+
+def subscription_store_keyboard(products: list[dict], page: int, total_pages: int) -> InlineKeyboardMarkup:
+    """Show every product in one column, including unavailable products."""
+    markup = _catalog_keyboard(products, page, total_pages)
+    for row in markup.inline_keyboard:
+        for button in row:
+            if button.callback_data and button.callback_data.startswith("sv_item:"):
+                product = products[int(button.callback_data.split(":", 1)[1])]
+                available = is_available(product)
+                status = localize("subscription_store.available" if available else "subscription_store.out_of_stock")
+                name = str(product.get("name") or localize("subscription_store.product_unnamed"))
+                selling_price = product.get("selling_price")
+                price = f"${selling_price}" if selling_price is not None else localize("subscription_store.price_unset")
+                button.text = f"{status} | {name[:40]} — {price}"
+                # aiogram preserves extra Bot API fields when serializing buttons.
+                button.style = "success" if available else "danger"
+    markup.inline_keyboard = [[button] for row in markup.inline_keyboard for button in row]
+    return markup
+
+
+def _page_count(total: int) -> int:
+    return max(1, (total + PRODUCTS_PER_PAGE - 1) // PRODUCTS_PER_PAGE)
+
+
+async def _show_catalog(call: CallbackQuery, state: FSMContext, page: int = 0) -> None:
+    try:
+        products = await StackVaultClient().get_products()
+    except StackVaultAPIError:
+        await call.message.edit_text(
+            localize("subscription_store.unavailable"),
+            reply_markup=subscription_store_keyboard([], 0, 1),
+        )
+        return
+
+    if not products:
+        await state.update_data(**{_PAGE_PRODUCTS_KEY: []})
+        await call.message.edit_text(
+            localize("subscription_store.empty"),
+            reply_markup=subscription_store_keyboard([], 0, 1),
+        )
+        return
+
+    total_pages = _page_count(len(products))
+    page = max(0, min(page, total_pages - 1))
+    page_products = await prepare_catalog(products[page * PRODUCTS_PER_PAGE:(page + 1) * PRODUCTS_PER_PAGE])
+    await state.update_data(**{_PAGE_PRODUCTS_KEY: page_products})
+    await call.message.edit_text(
+        localize("subscription_store.title"),
+        reply_markup=subscription_store_keyboard(page_products, page, total_pages),
+    )
+
+
+@router.callback_query(F.data == "sv_store")
+async def subscription_store_handler(call: CallbackQuery, state: FSMContext) -> None:
+    await _show_catalog(call, state)
+
+
+@router.callback_query(F.data.startswith("sv_page:"))
+async def subscription_store_page_handler(call: CallbackQuery, state: FSMContext) -> None:
+    try:
+        page = int((call.data or "").split(":", 1)[1])
+    except (IndexError, ValueError):
+        await call.answer(localize("subscription_store.product_missing"), show_alert=True)
+        return
+    await _show_catalog(call, state, page)
+
+
+@router.callback_query(F.data.startswith("sv_item:"))
+async def subscription_product_handler(call: CallbackQuery, state: FSMContext) -> None:
+    try:
+        index = int((call.data or "").split(":", 1)[1])
+    except (IndexError, ValueError):
+        await call.answer(localize("subscription_store.product_missing"), show_alert=True)
+        return
+
+    products = (await state.get_data()).get(_PAGE_PRODUCTS_KEY, [])
+    if not isinstance(products, list) or not 0 <= index < len(products):
+        await call.answer(localize("subscription_store.product_missing"), show_alert=True)
+        return
+
+    product = products[index]
+    name = escape(str(product.get("name") or localize("subscription_store.product_unnamed")))
+    selling_price = product.get("selling_price")
+    price = f"${escape(str(selling_price))}" if selling_price is not None else localize("subscription_store.price_unset")
+    status = localize("subscription_store.available" if is_available(product) else "subscription_store.out_of_stock")
+    stock = escape(str(product.get("stock") if product.get("stock") is not None else "0"))
+    await call.message.edit_text(
+        localize("subscription_store.product.title", name=name, price=price, stock=stock, status=status),
+        reply_markup=subscription_product_keyboard(),
+    )
+
+
+@router.callback_query(F.data == "sv_buy")
+async def subscription_purchase_placeholder_handler(call: CallbackQuery) -> None:
+    """Reserve the purchase action without changing the existing payment system."""
+    await call.answer(localize("subscription_store.purchase_coming_soon"), show_alert=True)

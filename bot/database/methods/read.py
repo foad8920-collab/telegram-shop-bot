@@ -263,13 +263,16 @@ async def get_item_name_by_id(item_id: int) -> str | None:
 
 
 async def select_item_values_amount(item_name: str) -> int:
-    """Return count of item_values for an item (by item name)."""
+    """Return legacy value count, or numeric stock when no values exist."""
     async with Database().session() as s:
-        return (await s.execute(
+        values = (await s.execute(
             select(func.count(ItemValues.id))
             .join(Goods, Goods.id == ItemValues.item_id)
             .where(Goods.name == item_name)
         )).scalar() or 0
+        if values:
+            return values
+        return (await s.execute(select(Goods.stock_quantity).where(Goods.name == item_name))).scalar() or 0
 
 
 async def check_value(item_name: str) -> bool:

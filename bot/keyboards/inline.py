@@ -4,31 +4,31 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from bot.i18n import localize
 from bot.database.models import Permission
 from bot.misc import LazyPaginator # noqa: F401
+from bot.misc.services.stackvault_pricing import is_available
 
 
 def main_menu(role: int, channel: str | None = None, helper: str | None = None) -> InlineKeyboardMarkup:
     """
-    Main menu: modern 2-column mobile-friendly layout.
+    Main menu with a balanced two-button layout for every screen size.
     """
     kb = InlineKeyboardBuilder()
-    # Row 1: Shop & Search
+    # Pair related actions to keep the menu compact without overcrowding buttons.
     kb.row(
         InlineKeyboardButton(text=localize("btn.shop"), callback_data="shop"),
         InlineKeyboardButton(text=localize("btn.search"), callback_data="shop_search"),
     )
-    # Row 2: Profile & Rules
     kb.row(
         InlineKeyboardButton(text=localize("btn.profile"), callback_data="profile"),
         InlineKeyboardButton(text=localize("btn.rules"), callback_data="rules"),
     )
-    # Row 3: Support & Language
+    kb.row(InlineKeyboardButton(text=localize("btn.subscription_store"), callback_data="sv_store"))
+
     row3 = []
     if helper:
         row3.append(InlineKeyboardButton(text=localize("btn.support"), url=f"tg://user?id={helper}"))
     row3.append(InlineKeyboardButton(text=localize("btn.language"), callback_data="choose_language"))
     kb.row(*row3)
 
-    # Row 4: Channel & Admin (if available)
     extra_row = []
     if channel:
         extra_row.append(InlineKeyboardButton(text=localize("btn.channel"), url=f"https://t.me/{channel.lstrip('@')}"))
@@ -39,6 +39,78 @@ def main_menu(role: int, channel: str | None = None, helper: str | None = None) 
 
     return kb.as_markup()
 
+
+def shop_source_keyboard() -> InlineKeyboardMarkup:
+    """Choose the subscription source before entering a store flow."""
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="🟢 اشتراكات StackVault", callback_data="shop_stackvault"))
+    kb.row(InlineKeyboardButton(text="🟣 اشتراكات Pandora", callback_data="shop_pandora"))
+    kb.row(InlineKeyboardButton(text="🔵 الاشتراكات المحلية", callback_data="shop_local"))
+    kb.row(InlineKeyboardButton(text=localize("btn.back"), callback_data="back_to_menu"))
+    return kb.as_markup()
+
+def subscription_store_keyboard(products: list[dict], page: int, total_pages: int) -> InlineKeyboardMarkup:
+    """Build the StackVault subscription-store product list and navigation."""
+    kb = InlineKeyboardBuilder()
+    for index, product in enumerate(products):
+        name = str(product.get("name") or localize("subscription_store.product_unnamed"))
+        selling_price = product.get("selling_price")
+        price = f"${selling_price}" if selling_price is not None else localize("subscription_store.price_unset")
+        status = localize("subscription_store.available" if is_available(product) else "subscription_store.out_of_stock")
+        label = f"{status} | {name[:40]} — {price}"
+        kb.row(InlineKeyboardButton(text=label, callback_data=f"sv_item:{index}"))
+
+    if total_pages > 1:
+        nav_buttons = []
+        if page > 0:
+            nav_buttons.append(InlineKeyboardButton(text="◀️", callback_data=f"sv_page:{page - 1}"))
+        nav_buttons.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="dummy_button"))
+        if page < total_pages - 1:
+            nav_buttons.append(InlineKeyboardButton(text="▶️", callback_data=f"sv_page:{page + 1}"))
+        kb.row(*nav_buttons)
+
+    kb.row(InlineKeyboardButton(text=localize("btn.back"), callback_data="back_to_menu"))
+    return kb.as_markup()
+
+
+def subscription_product_keyboard() -> InlineKeyboardMarkup:
+    """Product card actions. Purchasing is deliberately a placeholder for now."""
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text=localize("btn.buy"), callback_data="sv_buy"))
+    kb.row(InlineKeyboardButton(text=localize("btn.back"), callback_data="sv_store"))
+    return kb.as_markup()
+
+
+def pandora_products_keyboard(products: list[dict], page: int, total_pages: int) -> InlineKeyboardMarkup:
+    """Build a read-only Pandora catalog page."""
+    kb = InlineKeyboardBuilder()
+    for index, product in enumerate(products):
+        name = str(product.get("name") or product.get("title") or "Pandora subscription")
+        price = product.get("supplier_price", product.get("price"))
+        currency = str(product.get("currency") or product.get("currency_code") or "غير محددة")
+        price_text = f"{price} {currency}" if price is not None else "?"
+        kb.row(InlineKeyboardButton(
+            text=f"{name[:38]} — {price_text}",
+            callback_data=f"pditm:{index}:{page}",
+        ))
+    if total_pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="◀️", callback_data=f"pdpg_{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="dummy_button"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton(text="▶️", callback_data=f"pdpg_{page + 1}"))
+        kb.row(*nav)
+    kb.row(InlineKeyboardButton(text=localize("btn.back"), callback_data="shop"))
+    return kb.as_markup()
+
+
+def pandora_product_keyboard(page: int) -> InlineKeyboardMarkup:
+    """Read-only Pandora product actions."""
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="🛒 الشراء — قريبًا", callback_data="pd_buy_soon"))
+    kb.row(InlineKeyboardButton(text="◀️ العودة للمنتجات", callback_data=f"pdpg_{page}"))
+    return kb.as_markup()
 
 def language_menu() -> InlineKeyboardMarkup:
     """
@@ -106,6 +178,7 @@ def admin_console_keyboard(maintenance_mode: bool = False, role: int = 127) -> I
     if role & Permission.SETTINGS_MANAGE:
         maintenance_key = "admin.menu.maintenance_on" if maintenance_mode else "admin.menu.maintenance_off"
         kb.button(text=localize(maintenance_key), callback_data="toggle_maintenance")
+    kb.button(text="🔌 StackVault Test", callback_data="stackvault_test")
     kb.adjust(2)
     kb.row(InlineKeyboardButton(text=localize("btn.back"), callback_data="back_to_menu"))
     return kb.as_markup()
@@ -162,6 +235,7 @@ async def lazy_paginated_keyboard(
         nav_cb_prefix: str = "",
         back_text: str | None = None,
         extra_rows: list[list[InlineKeyboardButton]] | None = None,
+        item_style: Callable[[object], str | None] | str | None = None,
 ) -> InlineKeyboardMarkup:
     """
     Lazy pagination keyboard with data loading on demand.
@@ -174,7 +248,8 @@ async def lazy_paginated_keyboard(
     items = await paginator.get_page(page)
 
     for item in items:
-        kb.button(text=item_text(item), callback_data=item_callback(item))
+        style = item_style(item) if callable(item_style) else item_style
+        kb.button(text=item_text(item), callback_data=item_callback(item), style=style)
     kb.adjust(1)
 
     for row in (extra_rows or []):

@@ -16,6 +16,11 @@ from bot.filters import HasPermissionFilter
 from bot.misc import EnvKeys
 from bot.i18n import localize, esc
 from bot.states import UpdateItemFSM
+from bot.database import Database
+from bot.database.models import Goods
+from sqlalchemy import select
+from decimal import Decimal
+from bot.database.methods.read import invalidate_item_cache
 
 router = Router()
 
@@ -34,6 +39,17 @@ async def _show_update_item_error(send, error_code) -> None:
     """
     key = _UPDATE_ITEM_ERRORS.get(error_code, "errors.something_wrong")
     await send(localize(key), reply_markup=back('goods_management'))
+
+
+async def _save_stackvault_settings(name, data):
+    if 'stackvault_enabled' not in data:
+        return
+    async with Database().session() as s:
+        goods = (await s.execute(select(Goods).where(Goods.name == name))).scalar_one()
+        if goods.stackvault_product_id:
+            goods.stackvault_enabled = data.get('stackvault_enabled', True)
+            goods.stackvault_pricing_mode = data.get('stackvault_pricing_mode')
+            goods.stackvault_pricing_value = data.get('stackvault_pricing_value')
 
 
 @router.callback_query(F.data == 'update_item_amount', HasPermissionFilter(permission=Permission.CATALOG_MANAGE))
@@ -212,22 +228,68 @@ async def update_item_price(message: Message, state):
 
     await state.update_data(item_price=price)
     data = await state.get_data()
-    item_old_name = data.get('item_old_name')
-
-    # If the item is NOT infinite now — ask to make it infinite
-    if not await check_value(item_old_name):
+    item = await get_item_info_cached(data.get('item_old_name'))
+    if item and item.get('stackvault_product_id'):
+        await state.update_data(awaiting_stackvault_mode=True)
         await message.answer(
-            localize('admin.goods.update.infinity.make.question'),
-            reply_markup=question_buttons('change_make_infinity', 'goods_management')
+            "StackVault pricing mode: margin, percentage, fixed, or off.",
+            reply_markup=back('goods_management')
         )
+        return
+    await state.update_data(awaiting_stock_quantity=True)
+    await message.answer("Enter stock quantity (optional, 0 allowed). Send - to keep current quantity.", reply_markup=back('goods_management'))
+    return
+
+
+@router.message(UpdateItemFSM.waiting_make_infinity, F.text)
+async def update_item_stock_quantity(message: Message, state):
+    data = await state.get_data()
+    if data.get('awaiting_stackvault_mode'):
+        mode = (message.text or '').strip().lower()
+        if mode not in {'margin', 'percentage', 'fixed', 'off'}:
+            await message.answer("Enter margin, percentage, fixed, or off.", reply_markup=back('goods_management'))
+            return
+        await state.update_data(
+            stackvault_pricing_mode=None if mode == 'off' else mode,
+            stackvault_enabled=mode != 'off',
+            awaiting_stackvault_mode=False,
+            awaiting_stackvault_value=mode != 'off',
+        )
+        if mode == 'off':
+            await state.update_data(awaiting_stock_quantity=True)
+            await message.answer("Enter stock quantity (optional, 0 allowed). Send - to keep current quantity.", reply_markup=back('goods_management'))
+        else:
+            await message.answer("Enter StackVault pricing value.", reply_markup=back('goods_management'))
+        return
+    if data.get('awaiting_stackvault_value'):
+        raw = (message.text or '').strip()
+        mode = data.get('stackvault_pricing_mode')
+        value = parse_price(raw) if mode in {'margin', 'fixed'} else None
+        if mode == 'percentage':
+            try:
+                value = Decimal(raw)
+            except Exception:
+                value = None
+        if value is None or value < 0 or (mode == 'percentage' and value > 100):
+            await message.answer("Enter a valid non-negative pricing value.", reply_markup=back('goods_management'))
+            return
+        await state.update_data(stackvault_pricing_value=value, awaiting_stackvault_value=False, awaiting_stock_quantity=True)
+        await message.answer("Enter stock quantity (optional, 0 allowed). Send - to keep current quantity.", reply_markup=back('goods_management'))
+        return
+    if not data.get('awaiting_stock_quantity'):
+        return
+    raw = (message.text or '').strip()
+    if raw == '-':
+        await state.update_data(stock_quantity=None, keep_stock_quantity=True, awaiting_stock_quantity=False)
+    elif raw.isdigit():
+        await state.update_data(stock_quantity=int(raw), keep_stock_quantity=False, awaiting_stock_quantity=False)
     else:
-        # Otherwise ask to disable infinity
-        await message.answer(
-            localize('admin.goods.update.infinity.deny.question'),
-            reply_markup=question_buttons('change_deny_infinity', 'goods_management')
-        )
-    await state.set_state(UpdateItemFSM.waiting_make_infinity)
-
+        await message.answer("Enter a non-negative integer or - to keep current quantity.", reply_markup=back('goods_management'))
+        return
+    data = await state.get_data()
+    item_old_name = data.get('item_old_name')
+    make = not await check_value(item_old_name)
+    await message.answer(localize('admin.goods.update.infinity.make.question' if make else 'admin.goods.update.infinity.deny.question'), reply_markup=question_buttons('change_make_infinity' if make else 'change_deny_infinity', 'goods_management'))
 
 @router.callback_query(F.data.startswith('change_'), UpdateItemFSM.waiting_make_infinity)
 async def update_item_process(call: CallbackQuery, state):
@@ -248,10 +310,22 @@ async def update_item_process(call: CallbackQuery, state):
     item_description = data.get('item_description')
     category = data.get('item_category')
     price = data.get('item_price')
+    stock_quantity = data.get('stock_quantity')
+    if data.get('keep_stock_quantity'):
+        async with Database().session() as s:
+            stock_quantity = (await s.execute(select(Goods.stock_quantity).where(Goods.name == item_old_name))).scalar_one_or_none()
+    await state.update_data(stock_quantity=stock_quantity)
 
     if decision_yesno == 'no':
         # No type change (keep infinity/regular), update meta only
         ok, err = await update_item(item_old_name, item_new_name, item_description, price, category)
+        if ok and not data.get('keep_stock_quantity'):
+            async with Database().session() as s:
+                goods = (await s.execute(select(Goods).where(Goods.name == item_new_name))).scalar_one()
+                goods.stock_quantity = stock_quantity
+        if ok:
+            await _save_stackvault_settings(item_new_name, data)
+            await invalidate_item_cache(item_new_name)
         if not ok:
             await _show_update_item_error(call.message.edit_text, err)
             await state.clear()
@@ -304,11 +378,14 @@ async def update_item_infinity(message: Message, state):
         category_name=data.get('item_category'),
         values=[value],
         is_infinity=True,
+        stock_quantity=stock_quantity,
     )
     if not ok:
         await _show_update_item_error(message.answer, err)
         await state.clear()
         return
+
+    await _save_stackvault_settings(item_new_name, data)
 
     await message.answer(localize('admin.goods.update.success'), reply_markup=back('goods_management'))
 
@@ -364,11 +441,14 @@ async def update_item_no_infinity(call: CallbackQuery, state):
         category_name=data.get('item_category'),
         values=raw_values,
         is_infinity=False,
+        stock_quantity=stock_quantity,
     )
     if not ok:
         await _show_update_item_error(call.message.edit_text, err)
         await state.clear()
         return
+
+    await _save_stackvault_settings(item_new_name, data)
 
     text_lines = [
         localize('admin.goods.update.success'),

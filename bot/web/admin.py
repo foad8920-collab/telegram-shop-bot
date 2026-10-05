@@ -2,17 +2,18 @@ import hmac
 import logging
 import os
 import time
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
 
-from sqladmin import Admin, ModelView
+from sqladmin import Admin, BaseView, ModelView, expose
 from sqladmin.authentication import AuthenticationBackend
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse, RedirectResponse
+from starlette.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.routing import Route
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 from markupsafe import Markup, escape
 from wtforms import SelectField
@@ -90,6 +91,9 @@ from bot.database.methods.read import (
 from bot.database.methods.cache_utils import safe_create_task
 from bot.misc.services.restock_notifier import notify_restock
 from bot.middleware.security import invalidate_auth_caches, flush_all_role_caches
+from bot.database.models.main import StackVaultPricingSettings, StackVaultPriceOverride
+from bot.misc.services import StackVaultClient, StackVaultAPIError
+from bot.misc.services.stackvault_pricing import prepare_catalog
 
 
 # Authentication
@@ -190,8 +194,9 @@ class UserAdmin(AuditModelView, model=User):
         User.user_operations, User.user_goods,
         User.referral_earnings_received, User.referral_earnings_generated,
     ]
-    name = "User"
-    name_plural = "Users"
+    name = "مستخدم"
+    name_plural = "المستخدمون"
+    column_labels = {"telegram_id": "معرّف Telegram", "balance": "الرصيد", "role_id": "الدور", "referral_id": "المعرّف المُحيل", "registration_date": "تاريخ التسجيل", "is_blocked": "محظور"}
     icon = "fa-solid fa-users"
 
     async def _invalidate(self, model: Any, *, blocked: bool | None = None) -> None:
@@ -247,8 +252,9 @@ class RoleAdmin(AuditModelView, model=Role):
     column_details_exclude_list = ["users"]
     form_excluded_columns = [Role.users]
     column_sortable_list = [Role.id, Role.name]
-    name = "Role"
-    name_plural = "Roles"
+    name = "دور"
+    name_plural = "الأدوار والصلاحيات"
+    column_labels = {"id": "الرقم", "name": "اسم الدور", "default": "افتراضي", "permissions": "الصلاحيات"}
     icon = "fa-solid fa-shield-halved"
     column_formatters = {"permissions": _format_perms_html}
     column_formatters_detail = {"permissions": _format_perms_html}
@@ -282,8 +288,9 @@ class CategoryAdmin(AuditModelView, model=Categories):
     column_list = [Categories.name]
     column_searchable_list = [Categories.name]
     form_excluded_columns = [Categories.items]
-    name = "Category"
-    name_plural = "Categories"
+    name = "تصنيف"
+    name_plural = "التصنيفات"
+    column_labels = {"name": "اسم التصنيف"}
     icon = "fa-solid fa-folder"
 
 
@@ -293,20 +300,51 @@ class GoodsAdmin(AuditModelView, model=Goods):
     column_searchable_list = [Goods.name]
     column_sortable_list = [Goods.id, Goods.name, Goods.price]
     form_excluded_columns = [Goods.values]
-    name = "Product"
-    name_plural = "Products"
+    name = "المنتج"
+    name_plural = "المنتجات"
     icon = "fa-solid fa-box"
+    column_labels = {
+        "id": "الرقم",
+        "name": "اسم المنتج",
+        "price": "السعر",
+        "description": "الوصف",
+        "category_id": "التصنيف",
+        "sale_percent": "نسبة الخصم",
+        "sale_until": "انتهاء الخصم",
+        "stackvault_product_id": "معرّف منتج StackVault",
+        "supplier_price": "سعر المورد",
+        "supplier_stock": "مخزون المورد",
+        "supplier_in_stock": "المنتج متوفر لدى المورد",
+        "stackvault_enabled": "تفعيل StackVault",
+        "stackvault_pricing_mode": "طريقة التسعير",
+        "stackvault_pricing_value": "قيمة التسعير",
+        "stock_quantity": "الكمية المحلية",
+    }
     form_args = {
+        "id": {"label": "الرقم"},
+        "name": {"label": "اسم المنتج"},
+        "price": {"label": "السعر"},
+        "description": {"label": "الوصف"},
+        "category_id": {"label": "التصنيف"},
+        "stackvault_product_id": {"label": "معرّف منتج StackVault"},
+        "supplier_price": {"label": "سعر المورد"},
+        "supplier_stock": {"label": "مخزون المورد"},
+        "supplier_in_stock": {"label": "المنتج متوفر لدى المورد"},
+        "stackvault_enabled": {"label": "تفعيل StackVault"},
+        "stackvault_pricing_mode": {"label": "طريقة التسعير"},
+        "stackvault_pricing_value": {"label": "قيمة التسعير"},
+        "stock_quantity": {"label": "الكمية المحلية"},
         "sale_percent": {
+            "label": "نسبة الخصم",
             "description": (
-                "Discount percent (0-100) applied while the sale is active. "
-                "Leave empty to disable the sale."
+                "نسبة الخصم (0-100) أثناء سريان الخصم. اتركها فارغة لتعطيل الخصم."
             ),
         },
         "sale_until": {
+            "label": "انتهاء الخصم",
             "description": (
-                "Sale end time (UTC). The discount applies only while this is in "
-                "the future; a past/empty value means no active sale."
+                "وقت انتهاء الخصم (UTC). يطبّق الخصم ما دام الوقت في المستقبل؛ "
+                "والوقت المنقضي أو الفارغ يعني عدم وجود خصم فعّال."
             ),
         },
     }
@@ -329,8 +367,9 @@ class ItemValuesAdmin(AuditModelView, model=ItemValues):
     column_list = [ItemValues.id, ItemValues.item_id, ItemValues.value, ItemValues.is_infinity]
     column_searchable_list = [ItemValues.value]
     column_sortable_list = [ItemValues.id, ItemValues.item_id]
-    name = "Stock Item"
-    name_plural = "Stock Items"
+    name = "عنصر مخزون"
+    name_plural = "عناصر المخزون"
+    column_labels = {"id": "الرقم", "item_id": "المنتج", "value": "المحتوى", "is_infinity": "غير محدود"}
     icon = "fa-solid fa-warehouse"
 
     async def _item_name(self, model: Any) -> str | None:
@@ -367,8 +406,9 @@ class BoughtGoodsAdmin(ModelView, model=BoughtGoods):
     can_create = False
     can_edit = False
     can_delete = False
-    name = "Purchase"
-    name_plural = "Purchases"
+    name = "شراء"
+    name_plural = "المشتريات"
+    column_labels = {"id": "الرقم", "item_name": "اسم المنتج", "value": "المحتوى", "price": "السعر", "buyer_id": "المشتري", "bought_datetime": "تاريخ الشراء", "unique_id": "المعرّف الفريد"}
     icon = "fa-solid fa-cart-shopping"
 
 
@@ -381,8 +421,9 @@ class OperationsAdmin(ModelView, model=Operations):
     can_create = False
     can_edit = False
     can_delete = False
-    name = "Operation"
-    name_plural = "Operations"
+    name = "عملية"
+    name_plural = "العمليات"
+    column_labels = {"id": "الرقم", "user_id": "المستخدم", "operation_value": "قيمة العملية", "operation_time": "وقت العملية"}
     icon = "fa-solid fa-money-bill-transfer"
 
 
@@ -395,8 +436,9 @@ class PaymentsAdmin(ModelView, model=Payments):
     can_create = False
     can_edit = False
     can_delete = False
-    name = "Payment"
-    name_plural = "Payments"
+    name = "دفعة"
+    name_plural = "المدفوعات"
+    column_labels = {"id": "الرقم", "provider": "بوابة الدفع", "external_id": "المعرّف الخارجي", "user_id": "المستخدم", "amount": "المبلغ", "currency": "العملة", "status": "الحالة", "created_at": "تاريخ الإنشاء"}
     icon = "fa-solid fa-credit-card"
 
 
@@ -410,8 +452,9 @@ class ReferralEarningsAdmin(ModelView, model=ReferralEarnings):
     can_create = False
     can_edit = False
     can_delete = False
-    name = "Referral Earning"
-    name_plural = "Referral Earnings"
+    name = "أرباح إحالة"
+    name_plural = "أرباح الإحالات"
+    column_labels = {"id": "الرقم", "referrer_id": "المُحيل", "referral_id": "المُحال", "amount": "المبلغ", "original_amount": "المبلغ الأصلي", "created_at": "تاريخ الإنشاء"}
     icon = "fa-solid fa-handshake"
 
 
@@ -425,8 +468,9 @@ class AuditLogAdmin(ModelView, model=AuditLog):
     can_create = False
     can_edit = False
     can_delete = False
-    name = "Audit Log"
-    name_plural = "Audit Logs"
+    name = "سجل تدقيق"
+    name_plural = "سجل التدقيق"
+    column_labels = {"id": "الرقم", "timestamp": "الوقت", "level": "المستوى", "user_id": "المستخدم", "action": "الإجراء", "resource_type": "نوع المورد", "resource_id": "معرّف المورد", "details": "التفاصيل", "ip_address": "عنوان IP"}
     icon = "fa-solid fa-clipboard-list"
 
 
@@ -467,17 +511,17 @@ class PromoCodeAdmin(AuditModelView, model=PromoCodes):
     form_args = {
         "discount_type": {
             "choices": [
-                ("percent", "Percent (% off the price)"),
-                ("fixed", "Fixed amount off the price"),
-                ("balance", "Balance top-up (credit the user)"),
+                ("percent", "نسبة مئوية (خصم من السعر)"),
+                ("fixed", "مبلغ ثابت (خصم من السعر)"),
+                ("balance", "شحن الرصيد (إضافة للمستخدم)"),
             ],
-            "description": "How discount_value is applied.",
+            "description": "كيفية تطبيق discount_value.",
         },
         "scope": {
             "choices": [
-                ("global", "Global (whole shop)"),
-                ("category", "Category (pick one in the Category field)"),
-                ("item", "Item (pick one in the Item field)"),
+                ("global", "عام (المتجر بالكامل)"),
+                ("category", "تصنيف (اختر تصنيفًا)"),
+                ("item", "منتج (اختر منتجًا)"),
             ],
             "description": (
                 "Where the promo applies. Must match the binding: 'category' "
@@ -489,8 +533,9 @@ class PromoCodeAdmin(AuditModelView, model=PromoCodes):
     }
     column_formatters = {"scope": _format_promo_scope_html}
     column_formatters_detail = {"scope": _format_promo_scope_html}
-    name = "Promo Code"
-    name_plural = "Promo Codes"
+    name = "كود ترويجي"
+    name_plural = "الأكواد الترويجية"
+    column_labels = {"id": "الرقم", "code": "الكود", "discount_type": "نوع الخصم", "discount_value": "قيمة الخصم", "scope": "النطاق", "category_id": "التصنيف", "item_id": "المنتج", "max_uses": "الحد الأقصى للاستخدام", "current_uses": "الاستخدامات الحالية", "is_active": "نشط", "expires_at": "تاريخ الانتهاء", "created_at": "تاريخ الإنشاء"}
     icon = "fa-solid fa-tag"
 
     async def scaffold_form(self, *args, **kwargs):
@@ -505,7 +550,7 @@ class PromoCodeAdmin(AuditModelView, model=PromoCodes):
                 sa_select(Goods.id, Goods.name).order_by(Goods.name)
             )).all()
 
-        none_label = "— none (global) —"
+        none_label = "— بلا ربط (عام) —"
         cat_choices = [("", none_label)] + [(str(cid), name) for cid, name in cats]
         item_choices = [("", none_label)] + [(str(gid), name) for gid, name in items]
 
@@ -514,12 +559,12 @@ class PromoCodeAdmin(AuditModelView, model=PromoCodes):
 
         class PromoFormWithBindings(Form):
             category_id = SelectField(
-                "Category", choices=cat_choices, coerce=_coerce,
+                "التصنيف", choices=cat_choices, coerce=_coerce,
                 validators=[WtfOptional()],
                 description="Only for scope = category.",
             )
             item_id = SelectField(
-                "Item", choices=item_choices, coerce=_coerce,
+                "المنتج", choices=item_choices, coerce=_coerce,
                 validators=[WtfOptional()],
                 description="Only for scope = item.",
             )
@@ -580,8 +625,9 @@ class CartItemsAdmin(ModelView, model=CartItems):
     can_create = False
     can_edit = False
     can_delete = False
-    name = "Cart Item"
-    name_plural = "Cart Items"
+    name = "عنصر سلة"
+    name_plural = "عناصر السلة"
+    column_labels = {"id": "الرقم", "user_id": "المستخدم", "item_id": "المنتج", "added_at": "تاريخ الإضافة"}
     icon = "fa-solid fa-cart-plus"
 
 
@@ -592,8 +638,9 @@ class ReviewsAdmin(AuditModelView, model=Reviews):
     column_searchable_list = [Reviews.user_id, Reviews.item_id]
     column_sortable_list = [Reviews.id, Reviews.rating, Reviews.created_at]
     column_default_sort = (Reviews.id, True)
-    name = "Review"
-    name_plural = "Reviews"
+    name = "تقييم"
+    name_plural = "التقييمات"
+    column_labels = {"id": "الرقم", "user_id": "المستخدم", "item_id": "المنتج", "rating": "التقييم", "text": "النص", "created_at": "تاريخ الإنشاء"}
     icon = "fa-solid fa-star"
 
     async def _invalidate(self, model: Any) -> None:
@@ -669,6 +716,117 @@ async def metrics_json(request: Request) -> JSONResponse:
     return JSONResponse(metrics.get_metrics_summary(), status_code=200)
 
 
+async def stackvault_pricing_page(request: Request):
+    """StackVault catalog and pricing view for administrators."""
+    if not request.session.get("authenticated"):
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
+    products = []
+    markup = None
+    error = None
+    success = None
+
+    if request.method == "POST":
+        form = await request.form()
+        action = form.get("action")
+        if action in ("save_override", "remove_override"):
+            try:
+                product_id = str(form.get("product_id") or "").strip()
+                if not product_id:
+                    raise ValueError("معرّف المنتج غير صالح.")
+                async with Database().session() as session:
+                    override = (await session.execute(
+                        select(StackVaultPriceOverride).where(
+                            StackVaultPriceOverride.product_id == product_id
+                        )
+                    )).scalars().first()
+                    if action == "remove_override":
+                        if override is not None:
+                            await session.delete(override)
+                        audit_details = f"removed manual_price for product_id={product_id}"
+                        audit_action = "stackvault_manual_price_removed"
+                    else:
+                        try:
+                            manual_price = Decimal(str(form.get("manual_price")).strip())
+                            if not manual_price.is_finite() or manual_price < 0:
+                                raise ValueError
+                        except (InvalidOperation, TypeError, ValueError, AttributeError):
+                            raise ValueError("السعر اليدوي يجب أن يكون رقمًا صالحًا finite وأكبر من أو يساوي صفرًا.")
+                        manual_price = manual_price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                        if override is None:
+                            override = StackVaultPriceOverride(
+                                product_id=product_id,
+                                manual_price=manual_price,
+                            )
+                            session.add(override)
+                            audit_action = "stackvault_manual_price_added"
+                        else:
+                            override.manual_price = manual_price
+                            audit_action = "stackvault_manual_price_updated"
+                        audit_details = f"manual_price={manual_price} for product_id={product_id}"
+                    await session.commit()
+                await log_audit(
+                    audit_action,
+                    resource_type="StackVaultPriceOverride",
+                    resource_id=product_id,
+                    details=audit_details,
+                    ip_address=_client_ip(request),
+                )
+                success = "تم تحديث السعر اليدوي بنجاح." if action == "save_override" else "تمت إزالة السعر اليدوي بنجاح."
+            except ValueError as exc:
+                error = str(exc)
+            except Exception:
+                logger.exception("Failed to update StackVault manual price")
+                error = "تعذر حفظ التغيير. لم يتم تسجيل نجاح العملية."
+
+    try:
+        async with StackVaultClient() as client:
+            source_products = await client.get_products()
+        # Keep incomplete supplier records renderable and compatible with
+        # prepare_catalog, which expects an ``id`` key even when it is null.
+        catalog_products = [
+            {**product, "id": product.get("id")}
+            for product in source_products
+            if isinstance(product, dict)
+        ]
+        ids = [str(product["id"]) for product in catalog_products if product.get("id") is not None]
+        async with Database().session() as session:
+            settings = (await session.execute(select(StackVaultPricingSettings))).scalars().first()
+            markup = getattr(settings, "default_markup_percentage", None)
+            overrides = (await session.execute(
+                select(StackVaultPriceOverride).where(StackVaultPriceOverride.product_id.in_(ids))
+            )).scalars().all() if ids else []
+        override_map = {str(row.product_id): row.manual_price for row in overrides}
+        for product in catalog_products:
+            override = override_map.get(str(product.get("id")))
+            if override is not None:
+                product["manual_price"] = override
+        products = await prepare_catalog(catalog_products)
+        for product in products:
+            product["manual_price"] = override_map.get(str(product.get("id")))
+    except StackVaultAPIError as exc:
+        error = f"تعذر جلب منتجات StackVault: {exc}"
+    except Exception:
+        logger.exception("StackVault pricing page failed")
+        error = "تعذر الوصول إلى قاعدة البيانات أو تجهيز بيانات التسعير."
+
+    return templates.TemplateResponse(
+        request,
+        "stackvault_pricing.html",
+        {"title": "تسعير StackVault", "products": products, "markup": markup, "error": error, "success": success},
+    )
+
+
+class StackVaultPricingView(BaseView):
+    name = "تسعير StackVault"
+    icon = "fa-solid fa-tags"
+
+    @expose("/stackvault-pricing", methods=["GET", "POST"])
+    async def pricing(self, request: Request):
+        return await stackvault_pricing_page(request)
+
+
 # App Factory
 def create_admin_app(bot: Any = None) -> Starlette:
     """Build the admin panel app."""
@@ -700,7 +858,7 @@ def create_admin_app(bot: Any = None) -> Starlette:
         app,
         engine=Database().engine,
         authentication_backend=auth_backend,
-        title="Telegram Shop Admin",
+        title="لوحة إدارة منصة اليمن الإلكترونية",
         # Override the (blank) SQLAdmin index page with our help/cheat-sheet.
         templates_dir=os.path.join(os.path.dirname(__file__), "templates"),
     )
@@ -717,6 +875,7 @@ def create_admin_app(bot: Any = None) -> Starlette:
     admin.add_view(AuditLogAdmin)
     admin.add_view(PromoCodeAdmin)
     admin.add_view(CartItemsAdmin)
+    admin.add_view(StackVaultPricingView)
     if EnvKeys.REVIEWS_ENABLED == "1":
         admin.add_view(ReviewsAdmin)
 

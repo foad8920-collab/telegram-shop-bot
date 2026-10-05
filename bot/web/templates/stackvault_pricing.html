@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0-beta20/dist/css/tabler.min.css">
+</head>
+<body>
+<div class="page">
+  <header class="navbar navbar-expand-md d-print-none"><div class="container-xl">
+    <a class="navbar-brand" href="/admin">لوحة الإدارة</a>
+    <a class="btn btn-primary ms-auto" href="/admin/stackvault-pricing">إعادة تحميل المنتجات</a>
+  </div></header>
+  <div class="page-wrapper"><div class="container-xl py-4">
+    <h1 class="mb-4">تسعير StackVault</h1>
+    {% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
+    {% if success %}<div class="alert alert-success">{{ success }}</div>{% endif %}
+    <div class="card mb-4"><div class="card-body">
+      <form method="post" action="/admin/stackvault-pricing">
+        <label class="form-label" for="default_markup_percentage">نسبة الربح الافتراضية</label>
+        <div class="input-group">
+          <input class="form-control" id="default_markup_percentage" name="default_markup_percentage"
+                 type="text" inputmode="decimal" required
+                 value="{{ markup if markup is not none else '' }}">
+          <span class="input-group-text">%</span>
+          <button class="btn btn-primary" type="submit">حفظ نسبة الربح</button>
+        </div>
+      </form>
+    </div></div>
+    <div class="card"><div class="table-responsive"><table class="table table-vcenter card-table">
+      <thead><tr><th>Product ID</th><th>اسم المنتج</th><th>سعر المورد</th><th>المخزون</th><th>السعر النهائي</th><th>السعر اليدوي</th><th>الإجراء</th></tr></thead>
+      <tbody>{% for product in products %}<tr>
+        <td>{{ product.get('id', '—') }}</td><td>{{ product.get('name', '—') }}</td>
+        <td>{{ product.get('supplier_price', '—') }}</td><td>{{ product.get('stock', '—') }}</td>
+        <td>{{ product.get('selling_price', '—') }}</td>
+        <td>{% if product.get('manual_price') is not none %}{{ product.get('manual_price') }}{% else %}غير محدد{% endif %}</td>
+        <td>
+          <form method="post" action="/admin/stackvault-pricing" class="d-flex gap-2">
+            <input type="hidden" name="action" value="save_override">
+            <input type="hidden" name="product_id" value="{{ product.get('id', '') }}">
+            <input class="form-control form-control-sm" name="manual_price" type="text" inputmode="decimal"
+                   value="{{ product.get('manual_price', '') if product.get('manual_price') is not none else '' }}" placeholder="السعر">
+            <button class="btn btn-sm btn-primary" type="submit">حفظ السعر</button>
+          </form>
+          {% if product.get('manual_price') is not none %}
+          <form method="post" action="/admin/stackvault-pricing" class="mt-1">
+            <input type="hidden" name="action" value="remove_override">
+            <input type="hidden" name="product_id" value="{{ product.get('id', '') }}">
+            <button class="btn btn-sm btn-outline-danger" type="submit">إزالة السعر اليدوي</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>{% else %}<tr><td colspan="7" class="text-muted">لا توجد منتجات معروضة.</td></tr>{% endfor %}</tbody>
+    </table></div></div>
+  </div></div>
+</div>
+</body>
+</html>

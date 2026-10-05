@@ -1,5 +1,8 @@
+import asyncio
 import hashlib
 import json
+import aiohttp
+from uuid import uuid4
 from decimal import Decimal, ROUND_HALF_UP
 
 from aiogram import Router, F
@@ -8,6 +11,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 from bot.database.methods import get_user_referral, buy_item_transaction, process_payment_with_referral, create_pending_payment
+from bot.database.methods.transactions import prepare_stackvault_purchase, finalize_stackvault_purchase
 from bot.keyboards import back, payment_menu, close, get_payment_choice
 from bot.logger_mesh import logger
 from bot.database.methods.audit import log_audit
@@ -15,13 +19,14 @@ from bot.database.methods.cache_utils import safe_create_task
 from bot.misc import EnvKeys, ItemPurchaseRequest, validate_telegram_id, validate_money_amount, PaymentRequest
 from bot.handlers.other import _any_payment_method_enabled, is_safe_item_name, caller_name
 from bot.misc.metrics import get_metrics
-from bot.misc.services import CryptoPayAPI, CryptoPayAPIError, send_stars_invoice, send_fiat_invoice
+from bot.misc.services import CryptoPayAPI, CryptoPayAPIError, send_stars_invoice, send_fiat_invoice, StackVaultClient, StackVaultAPIError
 from bot.misc.services.payment import _minor_units_for, payload_amount
 from bot.filters import ValidAmountFilter
 from bot.i18n import localize, esc
 from bot.states import BalanceStates
 
 router = Router()
+_stackvault_locks: dict[int, asyncio.Lock] = {}
 
 
 async def _notify_referrer_bonus(bot, user_id: int, amount: Decimal | int, payer_name: str, payer_id: int):
@@ -458,12 +463,120 @@ async def buy_item_callback_handler(call: CallbackQuery, state: FSMContext):
         # Get promo code from state if applied
         promo_code = data.get('applied_promo')
 
+        # Serialize StackVault attempts per user; ordinary products keep their existing path.
+        sv_lock = _stackvault_locks.setdefault(user_id, asyncio.Lock())
+        current = await state.get_data()
+        if current.get("stackvault_unknown"):
+            await call.answer(
+                "حالة طلب StackVault السابق غير مؤكدة. لا تعاود المحاولة تلقائيًا.",
+                show_alert=True,
+            )
+            return
+        if sv_lock.locked() or current.get("stackvault_processing"):
+            await call.answer("عملية شراء StackVault قيد التنفيذ، يرجى الانتظار.", show_alert=True)
+            return
+        await sv_lock.acquire()
+        stackvault_state = False
+        try:
+            current = await state.get_data()
+            if current.get("stackvault_unknown"):
+                await call.answer(
+                    "حالة طلب StackVault السابق غير مؤكدة. لا تعاود المحاولة تلقائيًا.",
+                    show_alert=True,
+                )
+                return
+            if current.get("stackvault_processing"):
+                await call.answer("عملية شراء StackVault قيد التنفيذ، يرجى الانتظار.", show_alert=True)
+                return
+            await state.update_data(stackvault_processing=True)
+
+            # StackVault orders are created outside the local transaction/row lock.
+            is_sv, sv_status, sv_info = await prepare_stackvault_purchase(user_id, purchase_request.item_name, promo_code)
+            if is_sv:
+                stackvault_state = True
+                idempotency_key = f"stackvault:{user_id}:{uuid4().hex}"
+                await state.update_data(stackvault_idempotency_key=idempotency_key)
+                try:
+                    async with StackVaultClient() as client:
+                        response = await client.create_order(
+                            product_id=sv_info["product_id"], quantity=1, idempotency_key=idempotency_key
+                        )
+                    order = response.get("order") if isinstance(response.get("order"), dict) else response
+                    order_id = order.get("order_id") or order.get("id")
+                    delivery = order.get("delivery")
+                    if not order_id:
+                        raise StackVaultAPIError("StackVault order response missing order_id")
+                    if delivery is None:
+                        # The order was accepted, but the create response is incomplete.
+                        # Recover by lookup without issuing another POST.
+                        try:
+                            async with StackVaultClient() as client:
+                                lookup = await client.get_order(str(order_id))
+                            recovered = lookup.get("order") if isinstance(lookup.get("order"), dict) else lookup
+                            status = str(recovered.get("status", "")).lower()
+                            delivery = recovered.get("delivery")
+                            if status in {"failed", "rejected", "declined", "cancelled", "canceled"}:
+                                raise StackVaultAPIError(f"StackVault order was {status}")
+                            if status not in {"success", "successful", "completed", "complete", "delivered", "fulfilled"} or delivery is None:
+                                raise StackVaultAPIError("Unable to verify StackVault order")
+                            order = recovered
+                        except StackVaultAPIError:
+                            raise
+                        except Exception as e:
+                            raise StackVaultAPIError("Unable to verify StackVault order") from e
+                except StackVaultAPIError as e:
+                    cause = e.__cause__
+                    status = getattr(cause, "status", None)
+                    uncertain = (
+                        isinstance(cause, (TimeoutError, ConnectionError, aiohttp.ClientConnectionError))
+                        or (status is not None and status >= 500)
+                    )
+                    if uncertain:
+                        await state.update_data(
+                            stackvault_unknown=True,
+                            stackvault_idempotency_key=idempotency_key,
+                        )
+                        await log_audit("stackvault_order_unknown", level="ERROR", user_id=user_id, resource_type="Item", resource_id=purchase_request.item_name, details=str(e))
+                        await call.message.edit_text(
+                            "حالة طلب StackVault غير مؤكدة بسبب انقطاع الاتصال. لا تعاود المحاولة تلقائيًا.",
+                            reply_markup=back('back_to_item'),
+                        )
+                        return
+                    await log_audit("stackvault_order_failed", level="ERROR", user_id=user_id, resource_type="Item", resource_id=purchase_request.item_name, details=str(e))
+                    await call.message.edit_text(localize("shop.purchase.fail.general"), reply_markup=back('back_to_item'))
+                    return
+                delivery_value = delivery if isinstance(delivery, str) else json.dumps(delivery, ensure_ascii=False)
+                success, message, purchase_data = await finalize_stackvault_purchase(
+                    user_id, purchase_request.item_name, sv_info["price"], delivery_value, promo_code
+                )
+                if not success:
+                    await log_audit("stackvault_order_local_finalize_failed", level="ERROR", user_id=user_id, resource_type="Item", resource_id=str(order_id), details=message)
+                    error_key = "shop.insufficient_funds" if message == "insufficient_funds_after_stackvault" else "shop.purchase.fail.general"
+                    await call.message.edit_text(localize(error_key), reply_markup=back('back_to_item'))
+                    return
+                purchase_data["stackvault_order_id"] = order_id
+                # Continue through the existing receipt path; delivery is sent only after local commit.
+            else:
+                await state.update_data(stackvault_processing=False)
+                sv_lock.release()
+                if sv_status != "not_stackvault":
+                    error_key = {"user_not_found": "shop.purchase.fail.user_not_found", "item_not_found": "shop.item.not_found", "insufficient_funds": "shop.insufficient_funds"}.get(sv_status, "shop.purchase.fail.general")
+                    await call.message.edit_text(localize(error_key), reply_markup=back('back_to_item'))
+                    return
+        finally:
+            final_data = await state.get_data()
+            preserved = {"stackvault_unknown", "stackvault_idempotency_key"} if final_data.get("stackvault_unknown") else set()
+            await state.set_data({k: v for k, v in final_data.items() if k not in {"stackvault_processing", "stackvault_idempotency_key"} or k in preserved})
+            if sv_lock.locked():
+                sv_lock.release()
+
+        if not stackvault_state:
+            # Preserve the existing path for ordinary products and its stock semantics.
+            pass
+
         # Execute a transactional purchase
-        success, message, purchase_data = await buy_item_transaction(
-            user_id,
-            purchase_request.item_name,
-            promo_code=promo_code,
-        )
+        if sv_status == "not_stackvault":
+            success, message, purchase_data = await buy_item_transaction(user_id, purchase_request.item_name, promo_code=promo_code)
 
         if not success:
             # Error handling

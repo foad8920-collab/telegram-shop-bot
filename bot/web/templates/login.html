@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="d-flex align-items-center justify-content-center vh-100">
+  <form class="Fcol-lg-6 col-md-6 card card-md" action="{{ url_for('admin:login') }}" method="POST" autocomplete="off">
+    <div class="card-body">
+      <h2 class="card-title text-center mb-4">تسجيل الدخول إلى {{ admin.title }}</h2>
+      <div class="mb-3">
+        <label class="form-label">اسم المستخدم</label>
+        {% if error %}
+        <input name="username" type="text" class="form-control is-invalid" placeholder="أدخل اسم المستخدم"
+          autocomplete="off">
+        <div class="invalid-feedback">{{ error }}</div>
+        {% else %}
+        <input name="username" type="text" class="form-control" placeholder="أدخل اسم المستخدم" autocomplete="off">
+        {% endif %}
+      </div>
+      <div class="mb-2">
+        <label class="form-label">
+          كلمة المرور
+        </label>
+        <div class="input-group input-group-flat">
+          {% if error %}
+          <input name="password" type="password" class="form-control is-invalid" placeholder="كلمة المرور"
+            autocomplete="off">
+          <div class="invalid-feedback">{{ error }}</div>
+          {% else %}
+          <input name="password" type="password" class="form-control" placeholder="كلمة المرور" autocomplete="off">
+          {% endif %}
+        </div>
+      </div>
+      <div class="form-footer">
+        <button type="submit" class="btn btn-primary w-100">تسجيل الدخول</button>
+      </div>
+    </div>
+  </form>
+</div>
+{% endblock %}

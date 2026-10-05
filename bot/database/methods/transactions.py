@@ -127,21 +127,23 @@ async def buy_item_transaction(telegram_id: int, item_name: str, promo_code: str
                 # 4. Receive and lock the goods for purchase (blocking wait for row lock).
                 # Prefer an infinite value (never consumed) over finite stock
                 # LIMIT 1: only one row is consumed, and without it Postgres locks every stock row of the position for the whole transaction.
-                item_value = (await s.execute(
-                    select(ItemValues).where(ItemValues.item_id == goods.id)
-                    .order_by(ItemValues.is_infinity.desc(), ItemValues.id)
-                    .limit(1)
-                    .with_for_update()
-                )).scalars().first()
+                if goods.stock_quantity is not None and goods.stock_quantity > 0:
+                    goods.stock_quantity -= 1
+                    delivered_value = ""
+                else:
+                    item_value = (await s.execute(
+                        select(ItemValues).where(ItemValues.item_id == goods.id)
+                        .order_by(ItemValues.is_infinity.desc(), ItemValues.id)
+                        .limit(1)
+                        .with_for_update()
+                    )).scalars().first()
 
-                if not item_value:
-                    raise _Abort("out_of_stock")
-
-                delivered_value = item_value.value
-
-                # 5. If the product is not endless, we remove it
-                if not item_value.is_infinity:
-                    await s.delete(item_value)
+                    if item_value:
+                        delivered_value = item_value.value
+                        if not item_value.is_infinity:
+                            await s.delete(item_value)
+                    else:
+                        raise _Abort("out_of_stock")
 
                 # 6. Write off the balance
                 user.balance -= final_price
@@ -205,6 +207,67 @@ async def buy_item_transaction(telegram_id: int, item_name: str, promo_code: str
         return True, "success", result_data
 
     return False, "transaction_error", None
+
+
+async def prepare_stackvault_purchase(telegram_id: int, item_name: str, promo_code: str = None):
+    """Read-only validation for the external StackVault purchase."""
+    async with Database().session() as s:
+        user = (await s.execute(select(User).where(User.telegram_id == telegram_id))).scalars().one_or_none()
+        goods = (await s.execute(select(Goods).where(Goods.name == item_name))).scalars().one_or_none()
+        if not user:
+            return False, "user_not_found", None
+        if not goods:
+            return False, "item_not_found", None
+        if not goods.stackvault_product_id:
+            return False, "not_stackvault", None
+        price, _, _ = effective_price(goods)
+        final_price = price
+        if promo_code:
+            promo = (await s.execute(select(PromoCodes).where(PromoCodes.code == promo_code.upper()))).scalars().first()
+            err = await promo_rule_error(s, promo, telegram_id, goods=goods)
+            if err:
+                return False, _BUY_PROMO_ERRORS[err], None
+            final_price = apply_promo_discount(price, promo.discount_type, promo.discount_value, 1)
+        if user.balance < final_price:
+            return False, "insufficient_funds", None
+        return True, "success", {"product_id": goods.stackvault_product_id, "price": final_price}
+
+
+async def finalize_stackvault_purchase(telegram_id: int, item_name: str, price: Decimal, delivery, promo_code: str = None):
+    """Lock, revalidate, charge, and record a completed StackVault order."""
+    try:
+        async with Database().session() as s:
+            user = (await s.execute(select(User).where(User.telegram_id == telegram_id).with_for_update())).scalars().one_or_none()
+            goods = (await s.execute(select(Goods).where(Goods.name == item_name))).scalars().one_or_none()
+            if not user or not goods:
+                raise _Abort("item_not_found" if not goods else "user_not_found")
+            final_price = price
+            if promo_code:
+                promo = (await s.execute(select(PromoCodes).where(PromoCodes.code == promo_code.upper()).with_for_update())).scalars().first()
+                err = await promo_rule_error(s, promo, telegram_id, goods=goods)
+                if err:
+                    raise _Abort(_BUY_PROMO_ERRORS[err])
+                final_price = apply_promo_discount(effective_price(goods)[0], promo.discount_type, promo.discount_value, 1)
+                promo.current_uses += 1
+                s.add(PromoCodeUsages(promo_id=promo.id, user_id=telegram_id))
+            if user.balance < final_price:
+                raise _Abort("insufficient_funds_after_stackvault")
+            user.balance -= final_price
+            bought_item = BoughtGoods(item_name=item_name, value=delivery, price=final_price, buyer_id=telegram_id,
+                                      bought_datetime=datetime.now(timezone.utc), unique_id=uuid4().int >> 65)
+            s.add(bought_item)
+            await s.flush()
+            result = {"item_name": item_name, "value": delivery, "price": float(final_price),
+                      "unique_id": bought_item.unique_id, "bought_id": bought_item.id,
+                      "bought_datetime": bought_item.bought_datetime.isoformat()}
+    except _Abort as e:
+        return False, e.code, None
+    except Exception as e:
+        await log_audit("stackvault_purchase_failed", level="ERROR", user_id=telegram_id, resource_type="Item", resource_id=item_name, details=str(e))
+        return False, "transaction_error", None
+    safe_create_task(invalidate_user_cache(telegram_id))
+    safe_create_task(invalidate_stats_cache())
+    return True, "success", result
 
 
 async def process_payment_with_referral(
@@ -392,43 +455,49 @@ async def checkout_cart_transaction(
                     # is never consumed, so check it first and short-circuit: never
                     # mix infinite and limited rows to fill one line.
 
-                    # No FOR UPDATE needed — the goods row lock taken above already
-                    # excludes concurrent stock mutation for this position, and
-                    # ix_item_values_item_inf serves this predicate exactly.
-                    inf_value = (await s.execute(
-                        select(ItemValues)
-                        .where(ItemValues.item_id == goods.id, ItemValues.is_infinity.is_(True))
-                        .limit(1)
-                    )).scalars().first()
-
-                    if inf_value:
-                        delivered = [inf_value.value] * qty
+                    if goods.stock_quantity is not None and goods.stock_quantity >= qty:
+                        goods.stock_quantity -= qty
+                        delivered = [""] * qty
                         values_to_delete = []
                     else:
-                        # Claim qty rows. Safe under the goods lock: no other checkout
-                        # can be selecting or deleting this position's values, so the
-                        # FOR UPDATE ... LIMIT cannot be re-evaluated short by a peer.
-                        rows = (await s.execute(
+                        # No FOR UPDATE needed — the goods row lock taken above already
+                        # excludes concurrent stock mutation for this position, and
+                        # ix_item_values_item_inf serves this predicate exactly.
+                        inf_value = (await s.execute(
                             select(ItemValues)
-                            .where(ItemValues.item_id == goods.id)
-                            .order_by(ItemValues.id)
-                            .limit(qty)
-                            .with_for_update()
-                        )).scalars().all()
+                            .where(ItemValues.item_id == goods.id, ItemValues.is_infinity.is_(True))
+                            .limit(1)
+                        )).scalars().first()
 
-                        if not rows:
-                            # Nothing in stock at all: drop the line, buy the rest.
-                            items_to_remove.append(ci.id)
-                            continue
+                        if inf_value:
+                            delivered = [inf_value.value] * qty
+                            values_to_delete = []
+                            
+                        else:
+                            # Claim qty rows. Safe under the goods lock: no other checkout
+                            # can be selecting or deleting this position's values, so the
+                            # FOR UPDATE ... LIMIT cannot be re-evaluated short by a peer.
+                            rows = (await s.execute(
+                                select(ItemValues)
+                                .where(ItemValues.item_id == goods.id)
+                                .order_by(ItemValues.id)
+                                .limit(qty)
+                                .with_for_update()
+                            )).scalars().all()
 
-                        if len(rows) < qty:
-                            # Partial stock. Also catches the admin delete path, which
-                            # does not take the goods lock: a concurrently removed row
-                            # shows up as a short read here rather than a phantom.
-                            raise _Abort("out_of_stock")
+                            if not rows:
+                                items_to_remove.append(ci.id)
+                                continue
 
-                        delivered = [r.value for r in rows]
-                        values_to_delete = rows
+                            elif len(rows) < qty:
+                                # Partial stock. Also catches the admin delete path, which
+                                # does not take the goods lock: a concurrently removed row
+                                # shows up as a short read here rather than a phantom.
+                                raise _Abort("out_of_stock")
+
+                            else:
+                                delivered = [r.value for r in rows]
+                                values_to_delete = rows
 
                     # Sale price is the authoritative base; promo stacks on top.
                     price, _on_sale, _original_price = effective_price(goods)
@@ -608,6 +677,7 @@ async def replace_item_stock_and_meta(
         category_name: str,
         values: list[str],
         is_infinity: bool,
+        stock_quantity: int | None = None,
 ) -> tuple[bool, str | None, int]:
     """Swap a position's whole stock and its metadata in one transaction.
 
@@ -655,6 +725,7 @@ async def replace_item_stock_and_meta(
             goods.description = description
             goods.price = price
             goods.category_id = category_id
+            goods.stock_quantity = stock_quantity
 
             if new_name != old_name:
                 # Purchase history denormalizes the name, so carry the rename over.

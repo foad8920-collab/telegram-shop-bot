@@ -137,12 +137,26 @@ async def check_category_for_add_item(message: Message, state):
         )
         return
 
-    await state.update_data(item_category=category_name)
-    await message.answer(
-        localize('admin.goods.add.infinity.question'),
-        reply_markup=question_buttons('infinity', 'goods_management')
-    )
+    await state.update_data(item_category=category_name, awaiting_stock_quantity=True)
+    await message.answer("Enter stock quantity (optional, 0 allowed). Send - to skip.", reply_markup=back('goods_management'))
     await state.set_state(AddItemFSM.waiting_infinity)
+
+
+@router.message(AddItemFSM.waiting_infinity, F.text)
+async def add_item_stock_quantity(message: Message, state):
+    data = await state.get_data()
+    if not data.get('awaiting_stock_quantity'):
+        return
+    raw = (message.text or '').strip()
+    if raw == '-':
+        quantity = None
+    elif raw.isdigit():
+        quantity = int(raw)
+    else:
+        await message.answer("Enter a non-negative integer or - to skip.", reply_markup=back('goods_management'))
+        return
+    await state.update_data(stock_quantity=quantity, awaiting_stock_quantity=False)
+    await message.answer(localize('admin.goods.add.infinity.question'), reply_markup=question_buttons('infinity', 'goods_management'))
 
 
 @router.callback_query(F.data.startswith('infinity_'), AddItemFSM.waiting_infinity)
@@ -203,7 +217,7 @@ async def finish_adding_items_callback_handler(call: CallbackQuery, state):
     raw_values: list[str] = data.get("item_values", []) or []
 
     # Create position
-    await create_item(item_name, item_description, item_price, category_name, data.get('prices', {}))
+    await create_item(item_name, item_description, item_price, category_name, data.get('prices', {}), data.get('stock_quantity'))
 
     added, skipped_db_dup, skipped_batch_dup, skipped_invalid = await add_values_bulk(
         item_name, raw_values, is_infinity=False
@@ -270,7 +284,7 @@ async def finish_adding_item_callback_handler(message: Message, state):
         return
 
     # 1) Create position
-    await create_item(item_name, item_description, item_price, category_name, data.get('prices', {}))
+    await create_item(item_name, item_description, item_price, category_name, data.get('prices', {}), data.get('stock_quantity'))
     # 2) Add 1 infinite value
     added = await add_values_to_item(item_name, single_value, True)
 

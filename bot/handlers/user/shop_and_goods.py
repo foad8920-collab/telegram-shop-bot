@@ -1,5 +1,6 @@
 import asyncio
-from decimal import Decimal
+import time
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from functools import partial
 
 from aiogram import Router, F
@@ -9,7 +10,7 @@ from aiogram.exceptions import TelegramBadRequest
 from pydantic import ValidationError
 
 from bot.database.methods import (
-    get_bought_item_info, query_categories, query_user_bought_items, get_item_info_cached,
+    get_bought_item_info, query_user_bought_items, get_item_info_cached,
     select_item_values_amount_cached, effective_price
 )
 from bot.database.methods.read import (
@@ -20,21 +21,96 @@ from bot.database.methods.read import (
 from bot.database.methods.pricing import apply_promo_discount
 from bot.database.methods.create import create_review, subscribe_to_stock
 from bot.database.methods.delete import unsubscribe_from_stock
-from bot.database.methods.lazy_queries import query_item_reviews, query_goods_search, query_items_in_category
+from bot.database.methods.lazy_queries import query_item_reviews
 from bot.database.methods.transactions import redeem_balance_promo
 from bot.database.methods.audit import log_audit_bg
 from bot.database.models import Permission
 from bot.keyboards import item_info, back, lazy_paginated_keyboard
-from bot.keyboards.inline import simple_buttons, rating_keyboard
+from bot.keyboards.inline import (
+    simple_buttons, rating_keyboard, shop_source_keyboard,
+    pandora_products_keyboard, pandora_product_keyboard,
+)
 from aiogram.types import InlineKeyboardButton
 from bot.i18n import localize, esc
 from bot.misc import EnvKeys, LazyPaginator, ReviewRequest
 from bot.misc.metrics import get_metrics
+from bot.misc.services import StackVaultAPIError, StackVaultClient
+from bot.misc.services.pandora import PandoraAPIError, PandoraClient, calculate_selling_price
+from bot.misc.services.stackvault_pricing import prepare_catalog
 from bot.states import ShopStates
 from bot.states.review_state import ReviewFSM
 from bot.states.promo_state import PromoFSM
 
 router = Router()
+
+_STACKVAULT_CACHE_TTL = 60
+_stackvault_cache = {"expires": 0.0, "products": []}
+
+async def _get_stackvault_products(force: bool = False) -> list[dict]:
+    now = time.monotonic()
+    if not force and now < _stackvault_cache["expires"]:
+        return list(_stackvault_cache["products"])
+    try:
+        async with StackVaultClient() as client:
+            products = await client.get_products()
+    except StackVaultAPIError:
+        return []
+    normalized = []
+    for product in await prepare_catalog(products):
+        item = dict(product)
+        item["id"] = str(item.get("id")) if item.get("id") is not None else ""
+        normalized.append(item)
+    _stackvault_cache.update(expires=now + _STACKVAULT_CACHE_TTL, products=normalized)
+    return list(normalized)
+
+def _stackvault_available(product: dict) -> bool:
+    try:
+        return product.get("in_stock") is True and int(product.get("stock", 0)) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+async def _stackvault_search_query(query, offset=0, limit=10, count_only=False):
+    products = await _get_stackvault_products()
+    needle = str(query or "").casefold()
+    products = [p for p in products if needle in str(p.get("name") or "").casefold()]
+    if count_only:
+        return len(products)
+    return products[offset:offset + limit]
+
+
+async def _local_search_query(query, offset=0, limit=10, count_only=False):
+    return await _stackvault_search_query(query, offset, limit, count_only)
+
+
+async def _local_categories_query(offset=0, limit=10, count_only=False):
+    categories = list(dict.fromkeys(
+        p.get("category") for p in await _get_stackvault_products()
+        if p.get("category") is not None
+    ))
+    return len(categories) if count_only else categories[offset:offset + limit]
+
+
+async def _local_category_items_query(category_name, offset=0, limit=10, count_only=False):
+    products = [p for p in await _get_stackvault_products() if p.get("category") == category_name]
+    return len(products) if count_only else products[offset:offset + limit]
+
+
+_CATEGORY_EMOJIS = {
+    "chatgpt": "🤖", "canva": "🎨", "apple": "🍎", "adobe": "🖌️",
+    "microsoft": "🪟", "google": "🔎", "netflix": "🎬", "spotify": "🎵",
+    "gaming": "🎮", "games": "🎮", "vpn": "🛡️",
+}
+
+
+def _pretty_category(name: str, count: int) -> str:
+    clean = str(name or "").strip()
+    emoji = _CATEGORY_EMOJIS.get(clean.casefold(), "")
+    return f"« {clean.capitalize()} - {count} Plans ({count}) {emoji}".strip()
+
+
+async def _pretty_product(name: str) -> str:
+    return f"{name.get('name') or 'StackVault'} | ${name.get('selling_price') or '?'} | {name.get('stock', 0)} 📦"
 
 
 def _browsing_state_for(back_data: str):
@@ -80,7 +156,14 @@ async def _render_item_page(target, state: FSMContext, item_name: str, back_data
 
     reviews_enabled = EnvKeys.REVIEWS_ENABLED == "1"
 
-    reads = [select_item_values_amount_cached(item_name), check_value_cached(item_name)]
+    is_stackvault = bool(
+        item_info_data.get("stackvault_product_id")
+        and item_info_data.get("stackvault_enabled")
+    )
+    if is_stackvault:
+        reads = []
+    else:
+        reads = [select_item_values_amount_cached(item_name), check_value_cached(item_name)]
     if reviews_enabled:
         reads.append(get_item_avg_rating(item_name))
         reads.append(query_item_reviews(item_name, count_only=True))
@@ -88,10 +171,16 @@ async def _render_item_page(target, state: FSMContext, item_name: str, back_data
             reads.append(has_purchased_item(user_id, item_name))
     results = await asyncio.gather(*reads)
 
-    quantity, is_infinite = results[0], results[1]
-    avg_rating = results[2] if reviews_enabled else None
-    review_count_val = results[3] if reviews_enabled else 0
-    purchased = results[4] if (reviews_enabled and user_id) else False
+    if is_stackvault:
+        quantity = item_info_data.get("supplier_stock")
+        is_infinite = False
+        result_offset = 0
+    else:
+        quantity, is_infinite = results[0], results[1]
+        result_offset = 2
+    avg_rating = results[result_offset] if reviews_enabled else None
+    review_count_val = results[result_offset + 1] if reviews_enabled else 0
+    purchased = results[result_offset + 2] if (reviews_enabled and user_id) else False
 
     quantity_line = (
         localize("shop.item.quantity_unlimited")
@@ -99,13 +188,24 @@ async def _render_item_page(target, state: FSMContext, item_name: str, back_data
         else localize("shop.item.quantity_left", count=quantity)
     )
 
-    out_of_stock = (not is_infinite) and quantity == 0
+    if is_stackvault:
+        try:
+            out_of_stock = not item_info_data.get("supplier_in_stock") or int(quantity or 0) <= 0
+        except (TypeError, ValueError):
+            out_of_stock = not item_info_data.get("supplier_in_stock")
+    else:
+        out_of_stock = (not is_infinite) and quantity == 0
     subscribed = bool(
         out_of_stock and user_id and await is_subscribed_to_stock(user_id, item_name)
     )
 
     # Build price line. Sale price (if any) is the base; a promo stacks on top.
-    sale_price, on_sale, original_price = effective_price(item_info_data)
+    if is_stackvault:
+        stackvault_price = item_info_data.get("selling_price")
+        sale_price = Decimal(str(stackvault_price)) if stackvault_price is not None else None
+        on_sale, original_price = False, sale_price
+    else:
+        sale_price, on_sale, original_price = effective_price(item_info_data)
     price = sale_price
 
     applied_promo = data.get('applied_promo')
@@ -120,7 +220,9 @@ async def _render_item_page(target, state: FSMContext, item_name: str, back_data
             applied_promo = None
             await state.update_data(applied_promo=None)
 
-    if discounted is not None:
+    if price is None:
+        price_line = localize("shop.item.price", amount="?", currency=EnvKeys.PAY_CURRENCY)
+    elif discounted is not None:
         price_line = localize(
             "shop.item.price_discounted",
             original=original_price, discounted=discounted,
@@ -168,41 +270,207 @@ async def _render_item_page(target, state: FSMContext, item_name: str, back_data
 # --- Shop / categories / items ---
 
 async def _show_categories_page(call: CallbackQuery, state: FSMContext, page: int):
-    """Render one page of the category list (shared by the shop entry + paginate handlers)."""
-    paginator = LazyPaginator(query_categories, per_page=10)
-
-    # Pre-fetch page items to build the index map used by the item_callback.
-    page_items = await paginator.get_page(page)
-    items_index = {cat: idx for idx, cat in enumerate(page_items)}
-
+    paginator = LazyPaginator(_local_categories_query, per_page=10)
+    categories = await paginator.get_page(page)
     markup = await lazy_paginated_keyboard(
         paginator=paginator,
-        item_text=lambda cat: cat,
-        item_callback=lambda cat: f"cat:{items_index[cat]}:{page}",
-        page=page,
-        back_cb="back_to_menu",
-        nav_cb_prefix="categories-page_",
-        extra_rows=[[InlineKeyboardButton(
-            text=localize("btn.search"), callback_data="shop_search",
-        )]],
+        item_text=lambda category: _pretty_category(category, sum(
+            1 for product in _stackvault_cache["products"] if product.get("category") == category
+        )),
+        item_callback=lambda category: f"cat:{categories.index(category)}:{page}",
+        item_style="primary",
+        page=page, back_cb="back_to_menu", nav_cb_prefix="categories-page_",
     )
+    await call.message.edit_text(localize("shop.goods.choose"), reply_markup=markup)
+    await state.update_data(category_page_items=categories, category_page_num=page)
 
-    await call.message.edit_text(localize("shop.categories.title"), reply_markup=markup)
-    await state.update_data(
-        category_page_items=list(page_items),
-        category_page_num=page,
+
+async def _show_stackvault_page(call: CallbackQuery, state: FSMContext, page: int = 0):
+    products = await _get_stackvault_products()
+    page_products = products[page * 10:(page + 1) * 10]
+    async def _query(offset=0, limit=10, count_only=False):
+        if count_only:
+            return len(products)
+        return products[offset:offset + limit]
+    markup = await lazy_paginated_keyboard(
+        paginator=LazyPaginator(_query, per_page=10),
+        item_text=lambda product: f"{'متاح' if _stackvault_available(product) else 'غير متاح'} | {str(product.get('name') or 'StackVault')[:40]} | ${product.get('selling_price') or '?'} | {product.get('stock', 0)} 📦",
+        item_callback=lambda product: f"svitm:{page_products.index(product)}:{page}",
+        item_style=lambda product: "success" if int(product.get("stock", 0) or 0) > 0 else "danger",
+        page=page, back_cb="shop", nav_cb_prefix="svpg_",
     )
+    await call.message.edit_text("StackVault", reply_markup=markup)
+    await state.update_data(stackvault_page_products=page_products, stackvault_page_num=page)
+    await state.set_state(ShopStates.viewing_goods)
 
+@router.callback_query(F.data.startswith("svcat:"))
+async def stackvault_category_handler(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    await _show_stackvault_page(call, state)
+
+@router.callback_query(F.data.startswith("svpg_"), ShopStates.viewing_goods)
+async def stackvault_page_handler(call: CallbackQuery, state: FSMContext):
+    page = _page_arg(call.data[5:])
+    if page is None:
+        await call.answer(localize("errors.pagination_invalid"), show_alert=True)
+        return
+    await call.answer()
+    await _show_stackvault_page(call, state, page)
+
+@router.callback_query(F.data.startswith("svitm:"))
+async def stackvault_item_handler(call: CallbackQuery, state: FSMContext):
+    try:
+        _, index, page = call.data.split(":")
+        index, page = int(index), int(page)
+    except (ValueError, IndexError):
+        await call.answer(localize("shop.item.not_found"), show_alert=True)
+        return
+    data = await state.get_data()
+    products = data.get("stackvault_page_products", [])
+    if data.get("stackvault_page_num") != page or not 0 <= index < len(products):
+        await call.answer(localize("shop.item.not_found"), show_alert=True)
+        return
+    await call.answer()
+    product = products[index]
+    name = str(product.get("name") or "StackVault product")
+    await state.update_data(csrf_item=name, stackvault_product_id=str(product.get("id", "")))
+    status = "متاح" if _stackvault_available(product) else "غير متاح"
+    await call.message.edit_text(
+        f"{name}\n{product.get('description') or ''}\nالسعر: {product.get('selling_price') or '?'} {EnvKeys.PAY_CURRENCY}\nالمخزون: {product.get('stock', 0)}\nالتصنيف: {product.get('category')}\nالحالة: {status}",
+        reply_markup=back(f"svcat:{page}"),
+    )
 
 @router.callback_query(F.data == "shop")
 async def shop_callback_handler(call: CallbackQuery, state: FSMContext):
-    """Show list of shop categories with lazy loading."""
+    """Show subscription source choices."""
+    await call.answer()
     metrics = get_metrics()
     if metrics:
         metrics.track_conversion("purchase_funnel", "view_shop", call.from_user.id)
+    await call.message.edit_text("اختر مصدر الاشتراك:", reply_markup=shop_source_keyboard())
 
+
+@router.callback_query(F.data == "shop_stackvault")
+async def shop_stackvault_handler(call: CallbackQuery, state: FSMContext):
+    """Enter the existing StackVault category flow."""
+    await call.answer()
     await _show_categories_page(call, state, 0)
     await state.set_state(ShopStates.viewing_categories)
+
+
+@router.callback_query(F.data == "shop_pandora")
+async def shop_pandora_handler(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    try:
+        async with PandoraClient() as client:
+            products = await client.get_products()
+    except PandoraAPIError:
+        await call.message.edit_text(
+            "🟣 اشتراكات Pandora\n\nتعذر جلب المنتجات حاليًا.",
+            reply_markup=back("shop"),
+        )
+        return
+    await state.update_data(pandora_products=products)
+    await _show_pandora_page(call, state, 0)
+    await state.set_state(ShopStates.viewing_goods)
+
+
+async def _show_pandora_page(call: CallbackQuery, state: FSMContext, page: int):
+    products = (await state.get_data()).get("pandora_products", [])
+    per_page = 10
+    total_pages = max(1, (len(products) + per_page - 1) // per_page)
+    if page < 0 or page >= total_pages:
+        await call.answer("صفحة غير صالحة.", show_alert=True)
+        return
+    page_products = products[page * per_page:(page + 1) * per_page]
+    await state.update_data(pandora_page_products=page_products, pandora_page_num=page)
+    display_products = []
+    for product in page_products:
+        item = dict(product)
+        name = str(item.get("name") or item.get("title") or "Pandora subscription")
+        selling_price = calculate_selling_price(item.get("unit_price"))
+        price_text = f"{selling_price:.2f} USD" if selling_price is not None else "غير متاح"
+        stock = item.get("available_stock")
+        stock_text = str(stock) if stock is not None else "غير محدد"
+        item["name"] = f"\u2066{name} • 💰 {price_text} • 📦 {stock_text}\u2069"
+        display_products.append(item)
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    keyboard = InlineKeyboardBuilder()
+    for index, product in enumerate(display_products):
+        keyboard.row(InlineKeyboardButton(
+            text=product["name"],
+            callback_data=f"pditm:{index}:{page}",
+            style=("success" if int(product.get("available_stock", 0) or 0) > 0 else "danger")
+            if product.get("available_stock") is not None else None,
+        ))
+    if total_pages > 1:
+        nav_buttons = []
+        if page > 0:
+            nav_buttons.append(InlineKeyboardButton(
+                text="◀️", callback_data=f"pdpg_{page - 1}"
+            ))
+        nav_buttons.append(InlineKeyboardButton(
+            text=f"{page + 1}/{total_pages}", callback_data="dummy_button"
+        ))
+        if page < total_pages - 1:
+            nav_buttons.append(InlineKeyboardButton(
+                text="▶️", callback_data=f"pdpg_{page + 1}"
+            ))
+        keyboard.row(*nav_buttons)
+    keyboard.row(InlineKeyboardButton(text=localize("btn.back"), callback_data="shop"))
+    markup = keyboard.as_markup()
+    title = f"🟣 اشتراكات Pandora\n\nالمنتجات المتاحة: {len(products)}"
+    await call.message.edit_text(title, reply_markup=markup)
+
+
+@router.callback_query(F.data.startswith("pdpg_"), ShopStates.viewing_goods)
+async def pandora_page_handler(call: CallbackQuery, state: FSMContext):
+    page = _page_arg(call.data[5:])
+    if page is None:
+        await call.answer("صفحة غير صالحة.", show_alert=True)
+        return
+    await call.answer()
+    await _show_pandora_page(call, state, page)
+
+
+@router.callback_query(F.data.startswith("pditm:"), ShopStates.viewing_goods)
+async def pandora_item_handler(call: CallbackQuery, state: FSMContext):
+    try:
+        _, index, page = call.data.split(":")
+        index, page = int(index), int(page)
+    except (ValueError, IndexError):
+        await call.answer("المنتج غير موجود.", show_alert=True)
+        return
+    data = await state.get_data()
+    products = data.get("pandora_page_products", [])
+    if data.get("pandora_page_num") != page or not 0 <= index < len(products):
+        await call.answer("المنتج غير موجود.", show_alert=True)
+        return
+    product = products[index]
+    name = str(product.get("name") or product.get("title") or "Pandora subscription")
+    selling_price = calculate_selling_price(product.get("unit_price"))
+    variant_id = product.get("variant_id")
+    stock = product.get("available_stock")
+    lines = [f"🟣 {name}"]
+    if product.get("description"):
+        lines.append(f"الوصف: {product['description']}")
+    lines.append(f"💰 السعر: {f'{selling_price:.2f}' if selling_price is not None else '?'} USD")
+    lines.append(f"📦 المخزون: {stock if stock is not None else 'غير محدد'}")
+    if variant_id is not None:
+        lines.append(f"variant_id: {variant_id}")
+    await state.update_data(pandora_selected_product=product, pandora_variant_id=variant_id)
+    await call.answer()
+    await call.message.edit_text("\n".join(lines), reply_markup=pandora_product_keyboard(page))
+
+
+@router.callback_query(F.data == "pd_buy_soon")
+async def pandora_buy_soon_handler(call: CallbackQuery):
+    await call.answer("الشراء عبر Pandora سيكون متاحًا قريبًا.", show_alert=True)
+
+
+@router.callback_query(F.data == "shop_local")
+async def shop_local_handler(call: CallbackQuery):
+    await call.answer("مسار الاشتراكات المحلية غير متاح حاليًا.", show_alert=True)
 
 
 @router.callback_query(F.data.startswith('categories-page_'))
@@ -210,23 +478,21 @@ async def navigate_categories(call: CallbackQuery, state: FSMContext):
     """Pagination across shop categories with cache."""
     parts = call.data.split('_', 1)
     page = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+    await call.answer()
     await _show_categories_page(call, state, page)
 
 
 async def _show_goods_page(call: CallbackQuery, state: FSMContext,
                            category_name: str, cat_page: int, page: int):
     """Render one page of goods inside a category (shared by category-open + paginate)."""
-    from bot.database.methods.lazy_queries import query_items_in_category
-
-    paginator = LazyPaginator(partial(query_items_in_category, category_name), per_page=10)
+    paginator = LazyPaginator(partial(_local_category_items_query, category_name), per_page=10)
 
     page_items = await paginator.get_page(page)
-    items_index = {item: i for i, item in enumerate(page_items)}
-
     markup = await lazy_paginated_keyboard(
         paginator=paginator,
-        item_text=lambda item: item,
-        item_callback=lambda item: f"itm:{items_index[item]}:{page}",
+        item_text=lambda item: f"{'متاح' if _stackvault_available(item) else 'غير متاح'} | {str(item.get('name') or 'StackVault')[:40]} | ${item.get('selling_price') or '?'} | {item.get('stock', 0)} 📦",
+        item_callback=lambda item: f"itm:{item['id']}:{page}",
+        item_style=lambda item: "success" if int(item.get("stock", 0) or 0) > 0 else "danger",
         page=page,
         back_cb=f"categories-page_{cat_page}",
         nav_cb_prefix="gp_",
@@ -258,11 +524,12 @@ async def items_list_callback_handler(call: CallbackQuery, state: FSMContext):
 
     category = await _page_item_from_state(state, 'category_page_items', 'category_page_num', cat_page, idx)
     if category is None:
-        category = await _page_item_at(query_categories, cat_page, idx)
+        category = await _page_item_at(_local_categories_query, cat_page, idx)
     if category is None:
         await call.answer(localize("shop.item.not_found"), show_alert=True)
         return
 
+    await call.answer()
     await _show_goods_page(call, state, category, cat_page, 0)
 
 
@@ -277,6 +544,7 @@ async def navigate_goods(call: CallbackQuery, state: FSMContext):
         await call.answer(localize("errors.pagination_invalid"), show_alert=True)
         return
     data = await state.get_data()
+    await call.answer()
     await _show_goods_page(
         call, state,
         data.get('current_category', ''),
@@ -330,24 +598,41 @@ async def _open_item(call: CallbackQuery, state: FSMContext, item_name: str, bac
 async def item_info_callback_handler(call: CallbackQuery, state: FSMContext):
     """
     Show detailed information about the item.
-    Format: itm:{index}:{page}
+    Format: itm:{product_id}:{page}
     """
     try:
         parts = call.data.split(':')
-        idx = int(parts[1])
+        product_id = parts[1]
         goods_page = int(parts[2]) if len(parts) > 2 else 0
     except (ValueError, IndexError):
         await call.answer(localize("shop.item.not_found"), show_alert=True)
         return
 
-    item_name = await _page_item_from_state(state, 'goods_page_items', 'goods_page_num', goods_page, idx)
-    if not item_name:
+    data = await state.get_data()
+    item_name = next((item for item in data.get('goods_page_items', [])
+                      if isinstance(item, dict) and str(item.get('id')) == product_id), None)
+    if not item_name or data.get('goods_page_num') != goods_page:
         category = (await state.get_data()).get('current_category', '')
-        item_name = await _page_item_at(partial(query_items_in_category, category), goods_page, idx)
+        page_items = await LazyPaginator(partial(_local_category_items_query, category), per_page=10).get_page(goods_page)
+        item_name = next((item for item in page_items
+                          if isinstance(item, dict) and str(item.get('id')) == product_id), None)
     if not item_name:
         await call.answer(localize("shop.item.not_found"), show_alert=True)
         return
-    await _open_item(call, state, item_name, f"gp_{goods_page}")
+    if isinstance(item_name, dict):
+        await call.answer()
+        product = item_name
+        await state.update_data(csrf_item=str(product.get("name") or "StackVault product"))
+        status = "متاح" if _stackvault_available(product) else "غير متاح"
+        await call.message.edit_text(
+            f"{product.get('name') or 'StackVault product'}\n{product.get('description') or ''}\n"
+            f"السعر: {product.get('selling_price') or '?'} {EnvKeys.PAY_CURRENCY}\n"
+            f"المخزون: {product.get('stock', 0)}\nالتصنيف: {product.get('category')}\nالحالة: {status}",
+            reply_markup=back(f"gp_{goods_page}"),
+        )
+    else:
+        await call.answer()
+        await _open_item(call, state, item_name, f"gp_{goods_page}")
 
 
 # --- Catalog search ---
@@ -355,7 +640,7 @@ async def item_info_callback_handler(call: CallbackQuery, state: FSMContext):
 async def _show_search_page(target, state: FSMContext, query: str, page: int):
     """Render one page of search results. `target` is a CallbackQuery or Message."""
     paginator = LazyPaginator(
-        partial(query_goods_search, query), per_page=10,
+        partial(_local_search_query, query), per_page=10,
     )
 
     page_items = await paginator.get_page(page)
@@ -373,10 +658,11 @@ async def _show_search_page(target, state: FSMContext, query: str, page: int):
         return
 
     items_index = {item: i for i, item in enumerate(page_items)}
+    labels = await asyncio.gather(*(_pretty_product(item) for item in page_items))
     markup = await lazy_paginated_keyboard(
         paginator=paginator,
-        item_text=lambda item: item,
-        item_callback=lambda item: f"sitm:{items_index[item]}:{page}",
+        item_text=lambda item: labels[items_index[id(item)]],
+        item_callback=lambda item: f"svitm:{items_index[id(item)]}:{page}",
         page=page,
         back_cb="shop",
         nav_cb_prefix="sp_",
@@ -389,6 +675,8 @@ async def _show_search_page(target, state: FSMContext, query: str, page: int):
         search_query=query,
         search_page_items=list(page_items),
         search_page_num=page,
+        stackvault_page_products=list(page_items),
+        stackvault_page_num=page,
     )
     await state.set_state(ShopStates.viewing_search_results)
 
@@ -396,6 +684,7 @@ async def _show_search_page(target, state: FSMContext, query: str, page: int):
 @router.callback_query(F.data == "shop_search")
 async def shop_search_handler(call: CallbackQuery, state: FSMContext):
     """Prompt for a search query."""
+    await call.answer()
     await call.message.edit_text(localize("shop.search.prompt"), reply_markup=back("shop"))
     await state.set_state(ShopStates.waiting_search_query)
 
@@ -420,6 +709,7 @@ async def navigate_search(call: CallbackQuery, state: FSMContext):
         await call.answer(localize("errors.pagination_invalid"), show_alert=True)
         return
     data = await state.get_data()
+    await call.answer()
     await _show_search_page(call, state, data.get('search_query', ''), page)
 
 
@@ -443,10 +733,11 @@ async def search_item_info_handler(call: CallbackQuery, state: FSMContext):
     item_name = await _page_item_from_state(state, 'search_page_items', 'search_page_num', page, idx)
     if not item_name:
         query = (await state.get_data()).get('search_query', '')
-        item_name = await _page_item_at(partial(query_goods_search, query), page, idx)
+        item_name = await _page_item_at(partial(_local_search_query, query), page, idx)
     if not item_name:
         await call.answer(localize("shop.item.not_found"), show_alert=True)
         return
+    await call.answer()
     await _open_item(call, state, item_name, f"sp_{page}")
 
 
@@ -460,8 +751,8 @@ async def subscribe_stock_handler(call: CallbackQuery, state: FSMContext):
         await call.answer(localize("shop.item.not_found"), show_alert=True)
         return
 
+    await call.answer()
     ok, _code = await subscribe_to_stock(call.from_user.id, item_name)
-    await call.answer(localize("stock.subscribed" if ok else "errors.something_wrong"))
     await _render_item_page(call, state, item_name, user_id=call.from_user.id)
 
 
@@ -473,8 +764,8 @@ async def unsubscribe_stock_handler(call: CallbackQuery, state: FSMContext):
         await call.answer(localize("shop.item.not_found"), show_alert=True)
         return
 
+    await call.answer()
     await unsubscribe_from_stock(call.from_user.id, item_name)
-    await call.answer(localize("stock.unsubscribed"))
     await _render_item_page(call, state, item_name, user_id=call.from_user.id)
 
 
@@ -491,6 +782,7 @@ async def _leave_promo_input(state: FSMContext) -> None:
 
 @router.callback_query(F.data == "apply_promo")
 async def apply_promo_handler(call: CallbackQuery, state: FSMContext):
+    await call.answer()
     await call.message.edit_text(localize("promo.enter_code"), reply_markup=back("back_to_item"))
     await state.update_data(pre_promo_state=await state.get_state())
     await state.set_state(PromoFSM.waiting_item_code)
@@ -524,18 +816,18 @@ async def promo_code_text_handler(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "remove_promo")
 async def remove_promo_handler(call: CallbackQuery, state: FSMContext):
+    await call.answer()
     await state.update_data(applied_promo=None)
     data = await state.get_data()
     item_name = data.get('csrf_item')
     if item_name:
         await _render_item_page(call, state, item_name, user_id=call.from_user.id)
-    else:
-        await call.answer(localize("promo.removed"))
 
 
 @router.callback_query(F.data == "back_to_item")
 async def back_to_item_handler(call: CallbackQuery, state: FSMContext):
     """Return to item page, preserving promo state."""
+    await call.answer()
     data = await state.get_data()
     item_name = data.get('csrf_item')
     if not item_name:
@@ -553,6 +845,7 @@ async def back_to_item_handler(call: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "redeem_promo")
 async def redeem_promo_handler(call: CallbackQuery, state: FSMContext):
+    await call.answer()
     await call.message.edit_text(localize("promo.enter_redeem_code"), reply_markup=back("profile"))
     await state.set_state(PromoFSM.waiting_redeem_code)
 
@@ -653,6 +946,7 @@ async def _submit_review(user_id: int, state: FSMContext, text: str | None) -> b
 
 @router.callback_query(F.data == "skip_review_text", ReviewFSM.waiting_text)
 async def skip_review_text_handler(call: CallbackQuery, state: FSMContext):
+    await call.answer()
     ok = await _submit_review(call.from_user.id, state, None)
     await call.message.edit_text(
         localize("review.created" if ok else "errors.something_wrong"),
@@ -692,6 +986,7 @@ async def view_reviews_handler(call: CallbackQuery, state: FSMContext):
         await call.answer(localize("shop.item.not_found"), show_alert=True)
         return
 
+    await call.answer()
     paginator = LazyPaginator(partial(query_item_reviews, item_name), per_page=5)
 
     reviews = await paginator.get_page(page)
@@ -740,6 +1035,7 @@ async def bought_items_callback_handler(call: CallbackQuery, state: FSMContext):
     Show list of user's purchased items with lazy loading.
     """
     user_id = call.from_user.id
+    await call.answer()
 
     # Create paginator for user's bought items
     query_func = partial(query_user_bought_items, user_id)
@@ -794,6 +1090,7 @@ async def navigate_bought_items(call: CallbackQuery, state: FSMContext):
         pre_back = f'bought-goods-page_{data_type}_{current_index}'
 
     # Create paginator
+    await call.answer()
     query_func = partial(query_user_bought_items, user_id)
     paginator = LazyPaginator(query_func, per_page=10)
 
@@ -825,6 +1122,7 @@ async def bought_item_info_callback_handler(call: CallbackQuery):
         await call.answer(localize("errors.invalid_data"), show_alert=True)
         return
 
+    await call.answer()
     item = await get_bought_item_info(item_id, buyer_id=call.from_user.id)
     if not item:
         from bot.database.methods import check_role_cached
@@ -832,7 +1130,6 @@ async def bought_item_info_callback_handler(call: CallbackQuery):
         if Permission.granted(caller_perms, Permission.USERS_MANAGE):
             item = await get_bought_item_info(item_id)
     if not item:
-        await call.answer(localize("purchases.item.not_found"), show_alert=True)
         return
 
     text = "\n".join([

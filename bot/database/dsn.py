@@ -1,4 +1,4 @@
-from bot.misc import EnvKeys
+from bot.misc.env import EnvKeys
 
 
 def dsn() -> str:

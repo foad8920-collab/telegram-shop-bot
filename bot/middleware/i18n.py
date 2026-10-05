@@ -9,6 +9,7 @@ from bot.i18n import (
     set_current_locale,
     set_user_cache_locale,
 )
+from bot.i18n.main import _USER_LANG_CACHE
 
 
 class I18nMiddleware(BaseMiddleware):
@@ -27,7 +28,7 @@ class I18nMiddleware(BaseMiddleware):
         if user and not user.is_bot:
             # 1) Check in-memory cache
             lang = get_user_locale(user.id)
-            if lang == DEFAULT_LOCALE:
+            if user.id not in _USER_LANG_CACHE:
                 # 2) Check database cache
                 from bot.database.methods.read import check_user_cached
                 user_record = await check_user_cached(user.id)

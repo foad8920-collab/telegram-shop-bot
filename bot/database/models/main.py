@@ -152,6 +152,14 @@ class Goods(Database.BASE):
         Integer, ForeignKey('categories.id', ondelete="CASCADE"), nullable=False, index=True)
     sale_percent: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), nullable=True)
     sale_until: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    stackvault_product_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    stackvault_pricing_mode: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    stackvault_pricing_value: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+    stackvault_enabled: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    supplier_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+    supplier_stock: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    supplier_in_stock: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    stock_quantity: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     category: Mapped["Categories"] = relationship("Categories", back_populates="items", lazy='raise')
     values: Mapped[list["ItemValues"]] = relationship("ItemValues", back_populates="item", lazy='raise', passive_deletes=True)
 
@@ -280,6 +288,45 @@ class Payments(Database.BASE):
 
     def __str__(self):
         return f"{self.provider}:{self.external_id}"
+
+
+class StackVaultOrder(Database.BASE):
+    __tablename__ = "stackvault_orders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.telegram_id", ondelete="CASCADE"), nullable=False, index=True)
+    goods_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("goods.id", ondelete="CASCADE"), nullable=False, index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    order_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class StackVaultPricingSettings(Database.BASE):
+    __tablename__ = "stackvault_pricing_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    default_markup_percentage: Mapped[Decimal] = mapped_column(
+        Numeric(5, 2), nullable=False, server_default="30.00")
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class StackVaultPriceOverride(Database.BASE):
+    __tablename__ = "stackvault_price_overrides"
+
+    product_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    manual_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
 
 class ReferralEarnings(Database.BASE):

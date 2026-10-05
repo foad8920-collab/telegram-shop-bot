@@ -1,0 +1,87 @@
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from bot.handlers.user.subscription_store import PRODUCTS_PER_PAGE, _show_catalog, subscription_product_handler
+from bot.keyboards.inline import main_menu, subscription_store_keyboard
+from bot.misc.services.stackvault import StackVaultAPIError, StackVaultClient
+
+
+class _Response:
+    def __init__(self, payload):
+        self.payload = payload
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return None
+
+    def raise_for_status(self):
+        return None
+
+    async def json(self, **kwargs):
+        return self.payload
+
+
+class _Session:
+    def __init__(self, payload):
+        self.payload = payload
+        self.get = MagicMock(return_value=_Response(payload))
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_stackvault_client_returns_products(monkeypatch):
+    monkeypatch.setattr("bot.misc.services.stackvault.EnvKeys.STACKVAULT_API_KEY", "test-key")
+    session = _Session({"ok": True, "products": [{"name": "Pro", "price": 5, "stock": 2}]})
+    with patch("bot.misc.services.stackvault.aiohttp.ClientSession", return_value=session):
+        products = await StackVaultClient().get_products()
+    assert products == [{"name": "Pro", "price": 5, "stock": 2}]
+    assert session.get.call_args.args[0].endswith("/products")
+
+
+@pytest.mark.asyncio
+async def test_stackvault_client_rejects_failed_api_response(monkeypatch):
+    monkeypatch.setattr("bot.misc.services.stackvault.EnvKeys.STACKVAULT_API_KEY", "test-key")
+    with patch("bot.misc.services.stackvault.aiohttp.ClientSession", return_value=_Session({"ok": False})):
+        with pytest.raises(StackVaultAPIError):
+            await StackVaultClient().get_products()
+
+
+def test_main_menu_includes_subscription_store():
+    callbacks = [button.callback_data for row in main_menu(role=1).inline_keyboard for button in row]
+    assert "sv_store" in callbacks
+
+
+def test_subscription_store_keyboard_has_product_and_pagination():
+    markup = subscription_store_keyboard([{"name": "Pro", "price": 5}], page=1, total_pages=3)
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+    assert "sv_item:0" in callbacks
+    assert "sv_page:0" in callbacks
+    assert "sv_page:2" in callbacks
+
+
+@pytest.mark.asyncio
+async def test_catalog_shows_ten_products_per_page(make_callback_query, fsm_context):
+    products = [{"name": f"P{i}", "price": i, "stock": 1} for i in range(PRODUCTS_PER_PAGE + 1)]
+    call = make_callback_query(data="sv_store")
+    with patch("bot.handlers.user.subscription_store.StackVaultClient.get_products", new=AsyncMock(return_value=products)):
+        await _show_catalog(call, fsm_context)
+    markup = call.message.edit_text.call_args.kwargs["reply_markup"]
+    product_callbacks = [button.callback_data for row in markup.inline_keyboard for button in row if button.callback_data and button.callback_data.startswith("sv_item:")]
+    assert len(product_callbacks) == PRODUCTS_PER_PAGE
+
+
+@pytest.mark.asyncio
+async def test_product_card_uses_current_page_product(make_callback_query, fsm_context):
+    await fsm_context.update_data(stackvault_page_products=[{"name": "Pro <Plan>", "price": "9.99", "stock": 7}])
+    call = make_callback_query(data="sv_item:0")
+    await subscription_product_handler(call, fsm_context)
+    text = call.message.edit_text.call_args.args[0]
+    assert "Pro &lt;Plan&gt;" in text

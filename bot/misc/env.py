@@ -1,4 +1,4 @@
-﻿import logging
+import logging
 import os
 from dotenv import load_dotenv
 
@@ -35,9 +35,9 @@ class EnvKeys(ABC):
     OWNER_ID: Final = int(_get_required('OWNER_ID'))
 
     # Database
-    POSTGRES_DB: Final = _get_required("POSTGRES_DB")
-    POSTGRES_USER: Final = _get_required("POSTGRES_USER")
-    POSTGRES_PASSWORD: Final = _get_required("POSTGRES_PASSWORD")
+    POSTGRES_DB: Final = _get_optional("POSTGRES_DB", "postgres")
+    POSTGRES_USER: Final = _get_optional("POSTGRES_USER", "postgres")
+    POSTGRES_PASSWORD: Final = _get_optional("POSTGRES_PASSWORD", "")
     DB_PORT: Final = int(_get_optional("DB_PORT", "5432"))
     POSTGRES_HOST: Final = _get_optional("POSTGRES_HOST", "localhost")
     DB_POOL_SIZE: Final = int(_get_optional("DB_POOL_SIZE", "10"))
@@ -51,6 +51,7 @@ class EnvKeys(ABC):
     REDIS_PASSWORD: Final = _get_optional("REDIS_PASSWORD", "")
 
     # Payments
+    PANDORA_API_KEY: Final = _get_optional("PANDORA_API_KEY", "")
     TELEGRAM_PROVIDER_TOKEN: Final = _get_optional("TELEGRAM_PROVIDER_TOKEN", "")
     CRYPTO_PAY_TOKEN: Final = _get_optional("CRYPTO_PAY_TOKEN", "")
     STARS_PER_VALUE: Final = float(_get_optional("STARS_PER_VALUE", "0.91"))
@@ -59,6 +60,13 @@ class EnvKeys(ABC):
     PAYMENT_TIME: Final = int(_get_optional("PAYMENT_TIME", "1800"))
     MIN_AMOUNT: Final = int(_get_optional("MIN_AMOUNT", "20"))
     MAX_AMOUNT: Final = int(_get_optional("MAX_AMOUNT", "10000"))
+
+        # StackVault Reseller API
+    STACKVAULT_API_KEY: Final = _get_optional("STACKVAULT_API_KEY", "")
+    STACKVAULT_API_URL: Final = _get_optional(
+    "STACKVAULT_API_URL",
+    "https://decohomz.com/reseller-api/v1"
+    )
 
     # Links / UI
     CHANNEL_URL: Final = _get_optional("CHANNEL_URL", "")
@@ -95,7 +103,13 @@ class EnvKeys(ABC):
     AUDIT_RETENTION_DAYS: Final = int(_get_optional("AUDIT_RETENTION_DAYS", "90"))
     PAYMENTS_RETENTION_DAYS: Final = int(_get_optional("PAYMENTS_RETENTION_DAYS", "90"))
 
-    DATABASE_URL: Final = f"postgresql+asyncpg://{POSTGRES_USER}:{quote_plus(POSTGRES_PASSWORD)}@{POSTGRES_HOST}:{DB_PORT}/{POSTGRES_DB}"
+    # Prefer an explicit URL (e.g. Supabase pooler); retain the split
+    # POSTGRES_* configuration as a backwards-compatible fallback.
+    DATABASE_URL: Final = _get_optional(
+        "DATABASE_URL",
+        f"postgresql+asyncpg://{POSTGRES_USER}:{quote_plus(POSTGRES_PASSWORD)}"
+        f"@{POSTGRES_HOST}:{DB_PORT}/{POSTGRES_DB}",
+    )
 
     @classmethod
     def panel_is_exposed(cls) -> bool:
@@ -126,7 +140,7 @@ class EnvKeys(ABC):
         insecure = []
         if cls.SECRET_KEY == _DEFAULT_SECRET_KEY:
             insecure.append(
-                "SECRET_KEY is the shipped default â€” anyone who can reach the panel "
+                "SECRET_KEY is the shipped default — anyone who can reach the panel "
                 "can forge an admin session. Generate one with: "
                 'python -c "import secrets; print(secrets.token_hex(32))"'
             )

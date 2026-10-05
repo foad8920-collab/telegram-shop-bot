@@ -1,3 +1,4 @@
+from .stackvault_test import router as stackvault_test_router
 from .main import router as main_router
 from .adding_position import router as adding_position_router
 from .broadcast import router as broadcast_router
@@ -24,3 +25,4 @@ router.include_router(user_management_router)
 router.include_router(role_management_router)
 router.include_router(promo_management_router)
 router.include_router(sale_management_router)
+router.include_router(stackvault_test_router)
