@@ -25,8 +25,8 @@ def main_menu(role: int, channel: str | None = None, helper: str | None = None) 
 
     row3 = []
     if helper:
-        row3.append(InlineKeyboardButton(text=localize("btn.support"), url=f"tg://user?id={helper}"))
-    row3.append(InlineKeyboardButton(text=localize("btn.language"), callback_data="choose_language"))
+        row3.append(InlineKeyboardButton(text=localize("btn.support"), url=f"tg://user?id={helper}", style="primary"))
+    row3.append(InlineKeyboardButton(text=localize("btn.language"), callback_data="choose_language", style="primary"))
     kb.row(*row3)
 
     extra_row = []
