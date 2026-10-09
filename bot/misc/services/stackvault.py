@@ -21,6 +21,13 @@ class StackVaultClient:
 
     _timeout = aiohttp.ClientTimeout(total=20)
 
+    # ترويسات ثابتة لتخطي حماية Cloudflare
+    _base_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
+    }
+
     def __init__(self) -> None:
         self._session: aiohttp.ClientSession | None = None
 
@@ -40,12 +47,18 @@ class StackVaultClient:
     async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
         await self.close()
 
+    def _get_auth_headers(self) -> dict[str, str]:
+        """Combine base headers with Authorization token."""
+        headers = self._base_headers.copy()
+        headers["Authorization"] = f"Bearer {EnvKeys.STACKVAULT_API_KEY}"
+        return headers
+
     async def get_products(self) -> list[dict[str, Any]]:
         if not EnvKeys.STACKVAULT_API_KEY:
             raise StackVaultAPIError("STACKVAULT_API_KEY is not configured")
 
         url = f"{EnvKeys.STACKVAULT_API_URL.rstrip('/')}/products"
-        headers = {"Authorization": f"Bearer {EnvKeys.STACKVAULT_API_KEY}"}
+        headers = self._get_auth_headers()
         try:
             session = self._get_session()
             async with session.get(url, headers=headers) as response:
@@ -84,7 +97,7 @@ class StackVaultClient:
             raise StackVaultAPIError("STACKVAULT_API_KEY is not configured")
 
         url = f"{EnvKeys.STACKVAULT_API_URL.rstrip('/')}/orders"
-        headers = {"Authorization": f"Bearer {EnvKeys.STACKVAULT_API_KEY}"}
+        headers = self._get_auth_headers()
         body: dict[str, Any] = {"product_id": product_id, "quantity": quantity}
         if idempotency_key:
             body["idempotency_key"] = idempotency_key
@@ -119,7 +132,7 @@ class StackVaultClient:
             raise StackVaultAPIError("STACKVAULT_API_KEY is not configured")
 
         url = f"{EnvKeys.STACKVAULT_API_URL.rstrip('/')}/orders/{order_id}"
-        headers = {"Authorization": f"Bearer {EnvKeys.STACKVAULT_API_KEY}"}
+        headers = self._get_auth_headers()
 
         try:
             session = self._get_session()
@@ -152,7 +165,7 @@ class StackVaultClient:
             raise StackVaultAPIError("STACKVAULT_API_KEY is not configured")
 
         url = f"{EnvKeys.STACKVAULT_API_URL.rstrip('/')}/categories"
-        headers = {"Authorization": f"Bearer {EnvKeys.STACKVAULT_API_KEY}"}
+        headers = self._get_auth_headers()
         try:
             session = self._get_session()
             async with session.get(url, headers=headers) as response:
