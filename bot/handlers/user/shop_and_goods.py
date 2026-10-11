@@ -1,3 +1,12 @@
+import logging
+
+logger = logging.getLogger(__name__)
+
+from bot.database.main import Database
+from bot.database.models.main import Supplier, LocalSubscription
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
+
 import asyncio
 import time
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -30,7 +39,7 @@ from bot.keyboards.inline import (
     simple_buttons, rating_keyboard, shop_source_keyboard,
     pandora_products_keyboard, pandora_product_keyboard,
 )
-from aiogram.types import InlineKeyboardButton
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from bot.i18n import localize, esc
 from bot.misc import EnvKeys, LazyPaginator, ReviewRequest
 from bot.misc.metrics import get_metrics
@@ -42,6 +51,7 @@ from bot.states.review_state import ReviewFSM
 from bot.states.promo_state import PromoFSM
 
 router = Router()
+NL = chr(10)
 
 _STACKVAULT_CACHE_TTL = 60
 _stackvault_cache = {"expires": 0.0, "products": []}
@@ -347,7 +357,10 @@ async def shop_callback_handler(call: CallbackQuery, state: FSMContext):
     metrics = get_metrics()
     if metrics:
         metrics.track_conversion("purchase_funnel", "view_shop", call.from_user.id)
-    await call.message.edit_text("اختر مصدر الاشتراك:", reply_markup=shop_source_keyboard())
+    async with Database().session() as session:
+        res = await session.execute(select(Supplier).filter_by(is_active=True).order_by(Supplier.id))
+        suppliers = res.scalars().all()
+    await call.message.edit_text("اختر مصدر الاشتراك:", reply_markup=shop_source_keyboard(suppliers))
 
 
 @router.callback_query(F.data == "shop_stackvault")
@@ -468,9 +481,123 @@ async def pandora_buy_soon_handler(call: CallbackQuery):
     await call.answer("الشراء عبر Pandora سيكون متاحًا قريبًا.", show_alert=True)
 
 
+# ============================================================
+#  الاشتراكات المحلية (local_subscriptions)
+# ============================================================
+
+def _local_subscriptions_keyboard(items: list) -> InlineKeyboardMarkup:
+    """Build the inline keyboard for local subscriptions with stock-aware styles."""
+    rows: list[list[InlineKeyboardButton]] = []
+    for sub in items:
+        # استخدم sellable_quantity المحسوبة (codes: من الأكواد | invite/manual: يدوي)
+        qty = int(getattr(sub, "sellable_quantity", None) or sub.quantity or 0)
+        available = qty > 0
+        if available:
+            text = f" {sub.name}  {sub.price}$ (متوفر: {qty})"
+            cb = f"local_sub:{sub.id}"
+            style = (sub.style or "success").lower()
+            if style not in {"success", "primary", "danger"}:
+                style = "success"
+        else:
+            text = f" {sub.name}  نفدت الكمية"
+            cb = "local_sub_out_of_stock"
+            style = "danger"
+        rows.append([InlineKeyboardButton(text=text, callback_data=cb, style=style)])
+    rows.append([InlineKeyboardButton(text=" البحث في الاشتراكات المحلية", callback_data="local_search", style="primary")])
+    rows.append([InlineKeyboardButton(text=" رجوع", callback_data="back_to_menu", style="primary")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 @router.callback_query(F.data == "shop_local")
-async def shop_local_handler(call: CallbackQuery):
-    await call.answer("مسار الاشتراكات المحلية غير متاح حاليًا.", show_alert=True)
+async def shop_local_handler(call: CallbackQuery, state: FSMContext):
+    """Display active local subscriptions from the database."""
+    try:
+        await call.answer()
+    except TelegramBadRequest:
+        pass
+
+    try:
+        async with Database().session() as session:
+            result = await session.execute(
+                select(LocalSubscription)
+                .options(selectinload(LocalSubscription.codes))
+                .where(LocalSubscription.is_active == True)  # noqa: E712
+                .order_by(LocalSubscription.id)
+            )
+            items = result.scalars().all()
+    except Exception as e:
+        logger.exception("Failed to load local subscriptions: %s", e)
+        await call.message.edit_text(
+            " تعذّر تحميل الاشتراكات المحلية. حاول لاحقًا.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text=" رجوع", callback_data="back_to_menu", style="danger")
+            ]])
+        )
+        return
+
+    if not items:
+        await call.message.edit_text(
+            " لا توجد اشتراكات محلية متاحة حاليًا.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text=" رجوع", callback_data="back_to_menu", style="primary")
+            ]])
+        )
+        return
+
+    await call.message.edit_text(
+        " <b>الاشتراكات المحلية المتوفرة:</b>\n"
+        "اختر الاشتراك الذي تريد شراءه:",
+        parse_mode="HTML",
+        reply_markup=_local_subscriptions_keyboard(items)
+    )
+
+
+@router.callback_query(F.data == "local_sub_out_of_stock")
+async def local_sub_out_of_stock_handler(call: CallbackQuery):
+    await call.answer(" نفدت الكمية من هذا الاشتراك.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("local_sub:"))
+async def local_sub_details_handler(call: CallbackQuery, state: FSMContext):
+    try:
+        sub_id = int(call.data.split(":", 1)[1])
+    except (IndexError, ValueError):
+        await call.answer("معرّف غير صالح.", show_alert=True)
+        return
+
+    async with Database().session() as session:
+        result = await session.execute(
+            select(LocalSubscription)
+            .options(selectinload(LocalSubscription.codes))
+            .where(LocalSubscription.id == sub_id)
+        )
+        sub = result.scalar_one_or_none()
+        if sub is None or not sub.is_active:
+            await call.answer("هذا الاشتراك لم يعد متوفرًا.", show_alert=True)
+            return
+        available_qty = int(getattr(sub, "sellable_quantity", None) or 0)
+        if available_qty <= 0:
+            await call.answer(" نفدت الكمية من هذا الاشتراك.", show_alert=True)
+            return
+
+        text = (
+            f" <b>{sub.name}</b>" + NL + NL
+            + f" {sub.description or 'لا يوجد وصف.'}" + NL + NL
+            + f" السعر: <b>{sub.price}$</b>" + NL
+            + f" المتوفر: <b>{available_qty}</b>" + NL
+        )
+        markup = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=" شراء الآن", callback_data=f"local_buy:{sub.id}", style="success")],
+            [InlineKeyboardButton(text=" رجوع", callback_data="shop_local", style="primary")],
+        ])
+        await call.message.edit_text(text, parse_mode="HTML", reply_markup=markup)
+
+
+@router.callback_query(F.data.startswith("local_buy:"))
+async def local_buy_handler(call: CallbackQuery, state: FSMContext):
+    """Redirect to the purchase flow module."""
+    from bot.handlers.user.local_buy import start_buy_flow
+    await start_buy_flow(call, state)
 
 
 @router.callback_query(F.data.startswith('categories-page_'))
@@ -681,24 +808,10 @@ async def _show_search_page(target, state: FSMContext, query: str, page: int):
     await state.set_state(ShopStates.viewing_search_results)
 
 
-@router.callback_query(F.data == "shop_search")
-async def shop_search_handler(call: CallbackQuery, state: FSMContext):
-    """Prompt for a search query."""
-    await call.answer()
-    await call.message.edit_text(localize("shop.search.prompt"), reply_markup=back("shop"))
-    await state.set_state(ShopStates.waiting_search_query)
 
 
-@router.message(ShopStates.waiting_search_query, F.text)
-async def receive_search_query_handler(message: Message, state: FSMContext):
-    query = (message.text or "").strip()
 
-    if len(query) < 2 or len(query) > 64:
-        # Stay in the state so the user can just retype.
-        await message.answer(localize("shop.search.too_short"), reply_markup=back("shop"))
-        return
 
-    await _show_search_page(message, state, query, 0)
 
 
 @router.callback_query(F.data.startswith('sp_'), ShopStates.viewing_search_results)

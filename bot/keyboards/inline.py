@@ -1,3 +1,6 @@
+from bot.database.main import Database
+from bot.database.models.main import Supplier, BotButton
+from sqlalchemy import select
 from typing import Callable, Iterable, Tuple
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -7,46 +10,63 @@ from bot.misc import LazyPaginator # noqa: F401
 from bot.misc.services.stackvault_pricing import is_available
 
 
-def main_menu(role: int, channel: str | None = None, helper: str | None = None) -> InlineKeyboardMarkup:
+async def main_menu(role: int, channel: str | None = None, helper: str | None = None) -> InlineKeyboardMarkup:
+    """Main menu keyboard loaded from bot_buttons with locale-aware text.
+
+    - AR locale: uses DB text (with emoji + style).
+    - EN/RU locales: uses i18n translations for known callbacks.
     """
-    Main menu with a balanced two-button layout for every screen size.
-    """
+    from bot.keyboards.dynamic import load_menu_buttons, _resolve_text, _get_user_locale_safe
+
+    buttons = await load_menu_buttons("القائمة الرئيسية")
+    locale = _get_user_locale_safe()
+
     kb = InlineKeyboardBuilder()
-    # Pair related actions to keep the menu compact without overcrowding buttons.
-    kb.row(
-        InlineKeyboardButton(text=localize("btn.shop"), callback_data="shop", style="success"),
-        InlineKeyboardButton(text=localize("btn.search"), callback_data="shop_search", style="primary"),
-    )
-    kb.row(
-        InlineKeyboardButton(text=localize("btn.profile"), callback_data="profile", style="primary"),
-        InlineKeyboardButton(text=localize("btn.rules"), callback_data="rules", style="primary"),
-    )
-    kb.row(InlineKeyboardButton(text=localize("btn.subscription_store"), callback_data="sv_store", style="primary"))
 
-    row3 = []
-    if helper:
-        row3.append(InlineKeyboardButton(text=localize("btn.support"), url=f"tg://user?id={helper}", style="primary"))
-    row3.append(InlineKeyboardButton(text=localize("btn.language"), callback_data="choose_language", style="primary"))
-    kb.row(*row3)
+    for btn in buttons:
+        if btn.callback_data == "console" and not Permission.has_any_admin_perm(role):
+            continue
 
-    extra_row = []
+        text = _resolve_text(btn, locale, None)
+
+        btn_kwargs = {"text": text}
+        if btn.url:
+            btn_kwargs["url"] = btn.url
+        else:
+            btn_kwargs["callback_data"] = btn.callback_data
+        if btn.style:
+            btn_kwargs["style"] = btn.style
+        if btn.icon_custom_emoji_id:
+            btn_kwargs["icon_custom_emoji_id"] = btn.icon_custom_emoji_id
+
+        # One button per row (full width)
+        kb.row(InlineKeyboardButton(**btn_kwargs))
+
     if channel:
-        extra_row.append(InlineKeyboardButton(text=localize("btn.channel"), url=f"https://t.me/{channel.lstrip('@')}", style="primary"))
-    if Permission.has_any_admin_perm(role):
-        extra_row.append(InlineKeyboardButton(text=localize("btn.admin_menu"), callback_data="console", style="primary"))
-    if extra_row:
-        kb.row(*extra_row)
-
+        kb.row(InlineKeyboardButton(
+            text=localize("btn.channel"),
+            url=f"https://t.me/{channel.lstrip('@')}",
+            style="primary",
+        ))
     return kb.as_markup()
 
 
-def shop_source_keyboard() -> InlineKeyboardMarkup:
-    """Choose the subscription source before entering a store flow."""
+def shop_source_keyboard(suppliers=None) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="🟢 اشتراكات StackVault", callback_data="shop_stackvault"))
-    kb.row(InlineKeyboardButton(text="🟣 اشتراكات Pandora", callback_data="shop_pandora"))
-    kb.row(InlineKeyboardButton(text="🔵 الاشتراكات المحلية", callback_data="shop_local"))
-    kb.row(InlineKeyboardButton(text=localize("btn.back"), callback_data="back_to_menu"))
+    if suppliers:
+        for supplier in suppliers:
+            sup_style = getattr(supplier, 'style', None) or 'primary'
+            if getattr(supplier, 'api_url', '') == "local://subscriptions":
+                kb.row(InlineKeyboardButton(text=supplier.name, callback_data="shop_local", style=sup_style))
+            else:
+                kb.row(InlineKeyboardButton(text=f" اشتراكات {supplier.name}", callback_data=f"shop_supplier_{supplier.id}", style=sup_style))
+    else:
+        # إذا لم يتم تمرير الموردين تُعرض الخيارات الافتراضية فوراً دون تأخير
+        kb.row(InlineKeyboardButton(text=" اشتراكات StackVault", callback_data="shop_supplier_1", style="primary"))
+        kb.row(InlineKeyboardButton(text=" اشتراكات Pandora", callback_data="shop_supplier_2", style="primary"))
+        kb.row(InlineKeyboardButton(text="الاشتراكات المحلية", callback_data="shop_local", style="success"))
+
+    kb.row(InlineKeyboardButton(text=" رجوع", callback_data="back_to_menu", style="primary"))
     return kb.as_markup()
 
 def subscription_store_keyboard(products: list[dict], page: int, total_pages: int) -> InlineKeyboardMarkup:
@@ -158,29 +178,87 @@ def profile_keyboard(referral_percent: int, user_items: int = 0, cart_count: int
     return kb.as_markup()
 
 
-def admin_console_keyboard(maintenance_mode: bool = False, role: int = 127) -> InlineKeyboardMarkup:
+async def profile_keyboard_async(
+    referral_percent: int,
+    user_items: int = 0,
+    cart_count: int = 0,
+    locale: str = "ar",
+) -> InlineKeyboardMarkup:
+    """Dynamic profile keyboard loaded from bot_buttons table.
+
+    Hybrid approach:
+      - For Arabic locale: text from bot_buttons (with emoji + style).
+      - For EN/RU: text from i18n, falling back to DB text.
+      - Conditional buttons (referral, purchased) are shown only when relevant.
     """
-    Admin panel — shows only buttons the user has permissions for, in a 2-column layout.
-    """
+    from bot.keyboards.dynamic import load_menu_buttons, build_dynamic_keyboard
+
+    buttons = await load_menu_buttons("الملف الشخصي")
+    if not buttons:
+        # Fallback to old hardcoded version if DB is empty
+        return profile_keyboard(referral_percent, user_items=user_items, cart_count=cart_count)
+
+    # Conditional: hide referral if disabled, hide purchased if no items
+    skip: set[str] = set()
+    if referral_percent == 0:
+        skip.add("referral_system")
+    if user_items == 0:
+        skip.add("bought_items")
+
+    # i18n keys for EN/RU (Arabic uses DB text)
+    i18n_keys = {
+        "replenish_balance": "btn.replenish",
+        "cart": "btn.cart_empty",
+        "referral_system": "btn.referral",
+        "bought_items": "btn.purchased",
+        "operation_history": "btn.operation_history",
+        "redeem_promo": "btn.redeem_promo",
+        "back_to_menu": "btn.back",
+    }
+    i18n_kwargs = {}
+    if cart_count > 0:
+        i18n_kwargs["cart"] = {"count": cart_count}
+
+    return build_dynamic_keyboard(
+        buttons,
+        locale=locale,
+        i18n_keys=i18n_keys,
+        i18n_kwargs=i18n_kwargs,
+        per_row=2,
+        skip_callbacks=skip,
+    )
+
+
+async def admin_console_keyboard(maintenance_mode: bool = False, role: int = 127) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    if role & Permission.CATALOG_MANAGE:
-        kb.button(text=localize("admin.menu.shop"), callback_data="shop_management")
-        kb.button(text=localize("admin.menu.goods"), callback_data="goods_management")
-        kb.button(text=localize("admin.menu.categories"), callback_data="categories_management")
-    if role & Permission.PROMO_MANAGE:
-        kb.button(text=localize("admin.menu.promo"), callback_data="promo_mgmt")
-    if role & Permission.USERS_MANAGE:
-        kb.button(text=localize("admin.menu.users"), callback_data="user_management")
-    if role & Permission.ADMINS_MANAGE:
-        kb.button(text=localize("admin.menu.roles"), callback_data="role_mgmt")
-    if role & Permission.BROADCAST:
-        kb.button(text=localize("admin.menu.broadcast"), callback_data="send_message")
-    if role & Permission.SETTINGS_MANAGE:
-        maintenance_key = "admin.menu.maintenance_on" if maintenance_mode else "admin.menu.maintenance_off"
-        kb.button(text=localize(maintenance_key), callback_data="toggle_maintenance")
-    kb.button(text="🔌 StackVault Test", callback_data="stackvault_test")
-    kb.adjust(2)
-    kb.row(InlineKeyboardButton(text=localize("btn.back"), callback_data="back_to_menu"))
+    async with Database().session() as session:
+        stmt = select(BotButton).filter_by(menu_name='لوحة تحكم المسؤول', is_active=True).order_by(BotButton.sort_order)
+        res = await session.execute(stmt)
+        buttons = res.scalars().all()
+
+    row = []
+    for btn in buttons:
+        text_label = btn.button_text
+        button_style = btn.style or "primary"
+        if btn.callback_data == "toggle_maintenance":
+            text_label = f" وضع الصيانة: {'مفعلة' if maintenance_mode else 'معطلة'}"
+            button_style = "danger" if maintenance_mode else "primary"
+
+        btn_kwargs = {"text": text_label, "style": button_style}
+        if btn.url:
+            btn_kwargs["url"] = btn.url
+        else:
+            btn_kwargs["callback_data"] = btn.callback_data
+        if btn.icon_custom_emoji_id:
+            btn_kwargs["icon_custom_emoji_id"] = btn.icon_custom_emoji_id
+
+        row.append(InlineKeyboardButton(**btn_kwargs))
+        if len(row) == 2:
+            kb.row(*row)
+            row = []
+    if row:
+        kb.row(*row)
+    kb.row(InlineKeyboardButton(text=" رجوع", callback_data="back_to_menu", style="primary"))
     return kb.as_markup()
 
 

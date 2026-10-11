@@ -1,0 +1,290 @@
+[
+  {
+    "id": 28,
+    "menu_name": "الملف الشخصي",
+    "button_text": " نظام الإحالة",
+    "callback_data": "referral_system",
+    "style": "primary",
+    "sort_order": 3,
+    "is_active": true
+  },
+  {
+    "id": 29,
+    "menu_name": "الملف الشخصي",
+    "button_text": " مشترياتي",
+    "callback_data": "bought_items",
+    "style": "primary",
+    "sort_order": 4,
+    "is_active": true
+  },
+  {
+    "id": 30,
+    "menu_name": "الملف الشخصي",
+    "button_text": " سجل العمليات",
+    "callback_data": "operation_history",
+    "style": "primary",
+    "sort_order": 5,
+    "is_active": true
+  },
+  {
+    "id": 6,
+    "menu_name": "القائمة الرئيسية",
+    "button_text": " المتجر العام",
+    "callback_data": "shop",
+    "style": "primary",
+    "sort_order": 3,
+    "is_active": true
+  },
+  {
+    "id": 7,
+    "menu_name": "القائمة الرئيسية",
+    "button_text": " بحث",
+    "callback_data": "shop_search",
+    "style": "primary",
+    "sort_order": 4,
+    "is_active": true
+  },
+  {
+    "id": 8,
+    "menu_name": "القائمة الرئيسية",
+    "button_text": " حسابي",
+    "callback_data": "profile",
+    "style": "primary",
+    "sort_order": 5,
+    "is_active": true
+  },
+  {
+    "id": 9,
+    "menu_name": "القائمة الرئيسية",
+    "button_text": " القوانين",
+    "callback_data": "rules",
+    "style": "primary",
+    "sort_order": 6,
+    "is_active": true
+  },
+  {
+    "id": 10,
+    "menu_name": "القائمة الرئيسية",
+    "button_text": " اللغة",
+    "callback_data": "choose_language",
+    "style": "primary",
+    "sort_order": 7,
+    "is_active": true
+  },
+  {
+    "id": 3,
+    "menu_name": "القائمة الرئيسية",
+    "button_text": " الدعم الفني",
+    "callback_data": "support_ticket",
+    "style": "primary",
+    "sort_order": 8,
+    "is_active": true
+  },
+  {
+    "id": 12,
+    "menu_name": "القائمة الرئيسية",
+    "button_text": " لوحة التحكم",
+    "callback_data": "console",
+    "style": "primary",
+    "sort_order": 9,
+    "is_active": true
+  },
+  {
+    "id": 13,
+    "menu_name": "لوحة تحكم المسؤول",
+    "button_text": " إدارة المتجر",
+    "callback_data": "shop_management",
+    "style": "primary",
+    "sort_order": 1,
+    "is_active": true
+  },
+  {
+    "id": 14,
+    "menu_name": "لوحة تحكم المسؤول",
+    "button_text": " إدارة المنتجات",
+    "callback_data": "goods_management",
+    "style": "primary",
+    "sort_order": 2,
+    "is_active": true
+  },
+  {
+    "id": 15,
+    "menu_name": "لوحة تحكم المسؤول",
+    "button_text": " إدارة الأقسام",
+    "callback_data": "categories_management",
+    "style": "primary",
+    "sort_order": 3,
+    "is_active": true
+  },
+  {
+    "id": 16,
+    "menu_name": "لوحة تحكم المسؤول",
+    "button_text": " أكواد الخصم",
+    "callback_data": "promo_mgmt",
+    "style": "primary",
+    "sort_order": 4,
+    "is_active": true
+  },
+  {
+    "id": 17,
+    "menu_name": "لوحة تحكم المسؤول",
+    "button_text": " إدارة المستخدمين",
+    "callback_data": "user_management",
+    "style": "primary",
+    "sort_order": 5,
+    "is_active": true
+  },
+  {
+    "id": 18,
+    "menu_name": "لوحة تحكم المسؤول",
+    "button_text": " إدارة الأدوار والصلاحيات",
+    "callback_data": "role_mgmt",
+    "style": "primary",
+    "sort_order": 6,
+    "is_active": true
+  },
+  {
+    "id": 19,
+    "menu_name": "لوحة تحكم المسؤول",
+    "button_text": " إذاعة جماعية",
+    "callback_data": "send_message",
+    "style": "primary",
+    "sort_order": 7,
+    "is_active": true
+  },
+  {
+    "id": 20,
+    "menu_name": "لوحة تحكم المسؤول",
+    "button_text": " وضع الصيانة",
+    "callback_data": "toggle_maintenance",
+    "style": "danger",
+    "sort_order": 8,
+    "is_active": true
+  },
+  {
+    "id": 21,
+    "menu_name": "لوحة تحكم المسؤول",
+    "button_text": " StackVault Test",
+    "callback_data": "stackvault_test",
+    "style": "primary",
+    "sort_order": 9,
+    "is_active": true
+  },
+  {
+    "id": 22,
+    "menu_name": "إدارة المتجر",
+    "button_text": " الإحصائيات",
+    "callback_data": "admin_stats",
+    "style": "primary",
+    "sort_order": 1,
+    "is_active": true
+  },
+  {
+    "id": 23,
+    "menu_name": "إدارة المتجر",
+    "button_text": " عرض السجلات",
+    "callback_data": "admin_logs",
+    "style": "primary",
+    "sort_order": 2,
+    "is_active": true
+  },
+  {
+    "id": 24,
+    "menu_name": "إدارة المتجر",
+    "button_text": " المستخدمون",
+    "callback_data": "admin_users_view",
+    "style": "primary",
+    "sort_order": 3,
+    "is_active": true
+  },
+  {
+    "id": 25,
+    "menu_name": "إدارة المتجر",
+    "button_text": " البحث عن عنصر تم شراؤه",
+    "callback_data": "admin_search_item",
+    "style": "primary",
+    "sort_order": 4,
+    "is_active": true
+  },
+  {
+    "id": 26,
+    "menu_name": "الملف الشخصي",
+    "button_text": " شحن الرصيد",
+    "callback_data": "replenish_balance",
+    "style": "success",
+    "sort_order": 1,
+    "is_active": true
+  },
+  {
+    "id": 27,
+    "menu_name": "الملف الشخصي",
+    "button_text": " سلة المشتريات",
+    "callback_data": "cart",
+    "style": "primary",
+    "sort_order": 2,
+    "is_active": true
+  },
+  {
+    "id": 31,
+    "menu_name": "الملف الشخصي",
+    "button_text": " تفعيل كود خصم",
+    "callback_data": "redeem_promo",
+    "style": "primary",
+    "sort_order": 6,
+    "is_active": true
+  },
+  {
+    "id": 32,
+    "menu_name": "خيارات الدفع",
+    "button_text": " العملات الرقمية (CryptoPay)",
+    "callback_data": "pay_cryptopay",
+    "style": "primary",
+    "sort_order": 1,
+    "is_active": true
+  },
+  {
+    "id": 33,
+    "menu_name": "خيارات الدفع",
+    "button_text": " نجوم تليجرام (Telegram Stars)",
+    "callback_data": "pay_stars",
+    "style": "primary",
+    "sort_order": 2,
+    "is_active": true
+  },
+  {
+    "id": 34,
+    "menu_name": "خيارات الدفع",
+    "button_text": " الدفع المباشر",
+    "callback_data": "pay_fiat",
+    "style": "success",
+    "sort_order": 3,
+    "is_active": true
+  },
+  {
+    "id": 35,
+    "menu_name": "قائمة اللغات",
+    "button_text": " العربية",
+    "callback_data": "set_lang:ar",
+    "style": "primary",
+    "sort_order": 1,
+    "is_active": true
+  },
+  {
+    "id": 36,
+    "menu_name": "قائمة اللغات",
+    "button_text": " English",
+    "callback_data": "set_lang:en",
+    "style": "primary",
+    "sort_order": 2,
+    "is_active": true
+  },
+  {
+    "id": 37,
+    "menu_name": "قائمة اللغات",
+    "button_text": " Русский",
+    "callback_data": "set_lang:ru",
+    "style": "primary",
+    "sort_order": 3,
+    "is_active": true
+  }
+]

@@ -1,0 +1,187 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="container-xl py-4">
+
+  <div class="mb-4">
+    <h1 class="mb-1">
+      تصفح منتجات الموردين
+    </h1>
+    <p class="text-muted">اختر مورداً لعرض منتجاته، أو ابحث بالاسم.</p>
+  </div>
+
+  <!-- Filter Bar -->
+  <div class="card mb-4">
+    <div class="card-body">
+      <form method="get" action="/admin/supplier-products-browser" class="row g-3 align-items-end">
+
+        <div class="col-md-4">
+          <label class="form-label" for="supplier_id">المورد</label>
+          <select class="form-select" name="supplier_id" id="supplier_id"
+                  onchange="this.form.submit()">
+            {% for opt in supplier_options %}
+            <option value="{{ opt.id }}" {% if opt.selected %}selected{% endif %}>
+              {{ opt.icon }} {{ opt.name }}
+            </option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-md-4">
+          <label class="form-label" for="q">بحث بالاسم</label>
+          <input type="text" class="form-control" id="q" name="q"
+                 value="{{ query }}" placeholder="مثال: Netflix, ChatGPT...">
+        </div>
+
+        <div class="col-md-2">
+          <label class="form-check">
+            <input type="checkbox" class="form-check-input" name="visible" value="1"
+                   {% if visible_only %}checked{% endif %}>
+            <span class="form-check-label">الظاهرة فقط</span>
+          </label>
+        </div>
+
+        <div class="col-md-2 d-flex gap-2">
+          <button class="btn btn-primary flex-fill" type="submit">
+            تطبيق
+          </button>
+          <a href="/admin/supplier-products-browser?supplier_id={{ supplier_id }}"
+             class="btn btn-outline-secondary">
+            مسح
+          </a>
+        </div>
+
+      </form>
+    </div>
+  </div>
+
+  <!-- Summary -->
+  <div class="row g-3 mb-3">
+    <div class="col-md-4">
+      <div class="card">
+        <div class="card-body">
+          <div class="text-muted">المورد الحالي</div>
+          <div class="h2 mb-0">
+            {% if current_supplier %}
+              {{ current_supplier.icon_emoji or "" }}
+              {{ current_supplier.display_name or current_supplier.name }}
+            {% else %}
+              
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card">
+        <div class="card-body">
+          <div class="text-muted">إجمالي المنتجات</div>
+          <div class="h2 mb-0">{{ total }}</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card">
+        <div class="card-body">
+          <div class="text-muted">الصفحة</div>
+          <div class="h2 mb-0">{{ page }} / {{ total_pages }}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Products table -->
+  <div class="card">
+    <div class="table-responsive">
+      <table class="table table-vcenter card-table">
+        <thead>
+          <tr>
+            <th style="width: 70px;">ID</th>
+            <th>الاسم</th>
+            <th style="width: 120px;">الفئة</th>
+            <th style="width: 90px;">التكلفة</th>
+            <th style="width: 90px;">البيع</th>
+            <th style="width: 90px;">يدوي</th>
+            <th style="width: 80px;">المخزون</th>
+            <th style="width: 90px;">الحالة</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in products %}
+          <tr>
+            <td class="text-muted">{{ p.id }}</td>
+            <td>
+              <div class="fw-bold">{{ p.name }}</div>
+              <div class="text-muted small">{{ p.external_id[:30] }}</div>
+            </td>
+            <td>
+              <span class="badge bg-blue-lt">{{ p.category }}</span>
+            </td>
+            <td class="text-muted">{{ p.cost_price }}</td>
+            <td class="fw-bold text-success">{{ p.selling_price }}</td>
+            <td>
+              {% if p.manual_price and p.manual_price != "" %}
+                <span class="badge bg-yellow-lt">{{ p.manual_price }}</span>
+              {% else %}
+                <span class="text-muted"></span>
+              {% endif %}
+            </td>
+            <td class="text-center">{{ p.stock }}</td>
+            <td>
+              {% if not p.is_visible %}
+                <span class="badge bg-yellow-lt">مخفي</span>
+              {% elif p.is_available %}
+                <span class="badge bg-green-lt">متوفر</span>
+              {% else %}
+                <span class="badge bg-red-lt">نفدت</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="8" class="text-center text-muted py-4">
+              لا توجد منتجات لعرضها.
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Pagination -->
+    {% if total_pages > 1 %}
+    <div class="card-footer d-flex justify-content-center">
+      <ul class="pagination m-0">
+        {% if page > 1 %}
+        <li class="page-item">
+          <a class="page-link"
+             href="/admin/supplier-products-browser?supplier_id={{ supplier_id }}&page={{ page - 1 }}&q={{ query }}&visible={% if visible_only %}1{% else %}0{% endif %}">
+            السابق
+          </a>
+        </li>
+        {% endif %}
+
+        {% for pn in page_range %}
+        <li class="page-item {% if pn == page %}active{% endif %}">
+          <a class="page-link"
+             href="/admin/supplier-products-browser?supplier_id={{ supplier_id }}&page={{ pn }}&q={{ query }}&visible={% if visible_only %}1{% else %}0{% endif %}">
+            {{ pn }}
+          </a>
+        </li>
+        {% endfor %}
+
+        {% if page < total_pages %}
+        <li class="page-item">
+          <a class="page-link"
+             href="/admin/supplier-products-browser?supplier_id={{ supplier_id }}&page={{ page + 1 }}&q={{ query }}&visible={% if visible_only %}1{% else %}0{% endif %}">
+            التالي
+          </a>
+        </li>
+        {% endif %}
+      </ul>
+    </div>
+    {% endif %}
+
+  </div>
+
+</div>
+{% endblock %}

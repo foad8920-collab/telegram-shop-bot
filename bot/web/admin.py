@@ -5,7 +5,7 @@ import time
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
 
-from sqladmin import Admin, BaseView, ModelView, expose
+from sqladmin import Admin, BaseView, ModelView, expose, action
 from sqladmin.authentication import AuthenticationBackend
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -19,9 +19,11 @@ from markupsafe import Markup, escape
 from wtforms import SelectField
 from wtforms.validators import Optional as WtfOptional
 from sqlalchemy import select as sa_select
+from sqlalchemy.orm import joinedload, selectinload
 
 from bot.misc import EnvKeys
 from bot.database.methods.audit import log_audit
+from bot.web.supplier_products_view import SupplierProductsBrowserView
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +81,12 @@ class LoginRateLimiter:
 _login_limiter = LoginRateLimiter()
 from bot.database.main import Database
 from bot.database.models.main import (
+    Supplier, SupplierProduct, SupplierPricingRule,
+    SupplierCategoryMarkup, SupplierPriceOverride,
+    SupplierOrder, SupplierSyncLog,
+    LocalSubscription, BotButton, PaymentMethod,
+    LocalSubscriptionOrder, LocalSubscriptionCode,
+    
     User, Role, Categories, Goods, ItemValues,
     BoughtGoods, Operations, Payments, ReferralEarnings,
     AuditLog, PromoCodes, CartItems, Reviews, promo_scope_for,
@@ -94,6 +102,32 @@ from bot.middleware.security import invalidate_auth_caches, flush_all_role_cache
 from bot.database.models.main import StackVaultPricingSettings, StackVaultPriceOverride
 from bot.misc.services import StackVaultClient, StackVaultAPIError
 from bot.misc.services.stackvault_pricing import prepare_catalog
+
+
+# ============================================================
+#  Local Subscriptions  Admin helpers
+# ============================================================
+import asyncio as _asyncio
+from sqlalchemy import select as _sa_select
+
+_SUB_NAME_CACHE: dict[int, str] = {}
+
+
+async def _get_subscription_name(sub_id: int) -> str:
+    """Fetch subscription name by id (cached in-memory)."""
+    if sub_id in _SUB_NAME_CACHE:
+        return _SUB_NAME_CACHE[sub_id]
+    try:
+        async with Database().session() as session:
+            result = await session.execute(
+                _sa_select(LocalSubscription.name).where(LocalSubscription.id == sub_id)
+            )
+            row = result.first()
+            name = row[0] if row else f"#{sub_id}"
+    except Exception:
+        name = f"#{sub_id}"
+    _SUB_NAME_CACHE[sub_id] = name
+    return name
 
 
 # Authentication
@@ -828,6 +862,767 @@ class StackVaultPricingView(BaseView):
 
 
 # App Factory
+
+
+class SupplierPricingRuleAdmin(ModelView, model=SupplierPricingRule):
+    """Pricing rules per supplier (markup percent/fixed)."""
+    name = "قواعد التسعير"
+    name_plural = "قواعد تسعير الموردين"
+    icon = "fa-solid fa-tags"
+
+    column_list = [
+        SupplierPricingRule.id,
+        SupplierPricingRule.supplier_id,
+        SupplierPricingRule.markup_percent,
+        SupplierPricingRule.markup_fixed,
+        SupplierPricingRule.default_fixed_profit,
+        SupplierPricingRule.min_margin_percent,
+        SupplierPricingRule.min_selling_price,
+        SupplierPricingRule.max_selling_price,
+        SupplierPricingRule.round_to,
+        SupplierPricingRule.updated_at,
+    ]
+    column_sortable_list = [
+        SupplierPricingRule.id,
+        SupplierPricingRule.supplier_id,
+        SupplierPricingRule.markup_percent,
+    ]
+    column_default_sort = [("id", True)]
+    column_labels = {
+        "supplier_id": "المورد",
+        "markup_percent": "نسبة الربح %",
+        "markup_fixed": "زيادة ثابتة",
+        "default_fixed_profit": "ربح ثابت افتراضي",
+        "min_margin_percent": "حد أدنى للربح %",
+        "min_selling_price": "أدنى سعر بيع",
+        "max_selling_price": "أعلى سعر بيع",
+        "round_to": "تقريب إلى",
+        "updated_at": "آخر تحديث",
+    }
+    page_size = 25
+
+    def __str__(self):
+        return f"Pricing #{self.id}"
+
+
+class SupplierCategoryMarkupAdmin(ModelView, model=SupplierCategoryMarkup):
+    """Category-specific markup overrides."""
+    name = "تسعير الفئات"
+    name_plural = "تسعير فئات الموردين"
+    icon = "fa-solid fa-layer-group"
+
+    column_list = [
+        SupplierCategoryMarkup.id,
+        SupplierCategoryMarkup.supplier_id,
+        SupplierCategoryMarkup.category_keyword,
+        SupplierCategoryMarkup.markup_percent,
+        SupplierCategoryMarkup.fixed_profit,
+    ]
+    column_searchable_list = [
+        SupplierCategoryMarkup.category_keyword,
+    ]
+    column_default_sort = [("id", True)]
+    column_labels = {
+        "supplier_id": "المورد",
+        "category_keyword": "الفئة",
+        "markup_percent": "نسبة الربح %",
+        "fixed_profit": "ربح ثابت",
+    }
+    page_size = 50
+
+    def __str__(self):
+        return f"{self.category_keyword} +{self.markup_percent}%"
+
+
+class SupplierPriceOverrideAdmin(ModelView, model=SupplierPriceOverride):
+    """Fixed price overrides for specific products."""
+    name = "تجاوزات الأسعار"
+    name_plural = "تجاوزات أسعار الموردين"
+    icon = "fa-solid fa-lock"
+
+    column_list = [
+        SupplierPriceOverride.id,
+        SupplierPriceOverride.supplier_id,
+        SupplierPriceOverride.external_id,
+        SupplierPriceOverride.fixed_price,
+        SupplierPriceOverride.reason,
+        SupplierPriceOverride.created_at,
+    ]
+    column_searchable_list = [
+        SupplierPriceOverride.external_id,
+        SupplierPriceOverride.reason,
+    ]
+    column_default_sort = [("id", True)]
+    column_labels = {
+        "supplier_id": "المورد",
+        "external_id": "معرّف المنتج",
+        "fixed_price": "السعر المثبّت",
+        "reason": "السبب",
+        "created_at": "تاريخ الإنشاء",
+    }
+    page_size = 50
+
+    def __str__(self):
+        return f"Override {self.external_id} -> {self.fixed_price}"
+
+
+class SupplierOrderAdmin(ModelView, model=SupplierOrder):
+    """Purchase orders (reserved for future automation)."""
+    name = "طلبات الموردين"
+    name_plural = "طلبات الموردين"
+    icon = "fa-solid fa-receipt"
+
+    column_list = [
+        SupplierOrder.id,
+        SupplierOrder.supplier_id,
+        SupplierOrder.user_id,
+        SupplierOrder.product_id,
+        SupplierOrder.quantity,
+        SupplierOrder.cost_price,
+        SupplierOrder.selling_price,
+        SupplierOrder.profit,
+        SupplierOrder.status,
+        SupplierOrder.created_at,
+        SupplierOrder.completed_at,
+    ]
+    column_sortable_list = [
+        SupplierOrder.id,
+        SupplierOrder.status,
+        SupplierOrder.created_at,
+    ]
+    column_default_sort = [("created_at", True)]
+    column_filters = [
+        SupplierOrder.supplier_id,
+        SupplierOrder.status,
+    ]
+    column_labels = {
+        "supplier_id": "المورد",
+        "user_id": "المستخدم",
+        "product_id": "المنتج",
+        "quantity": "الكمية",
+        "cost_price": "التكلفة",
+        "selling_price": "سعر البيع",
+        "profit": "الربح",
+        "status": "الحالة",
+        "created_at": "تاريخ الإنشاء",
+        "completed_at": "تاريخ الإكمال",
+    }
+    page_size = 50
+
+    def status_badge(model, _attr) -> Markup:
+        colors = {
+            "pending":   "#f0ad4e",
+            "completed": "#5cb85c",
+            "failed":    "#d9534f",
+            "refunded":  "#999999",
+        }
+        color = colors.get(model.status, "#666666")
+        return Markup(
+            f'<span style="background:{color};color:#fff;'
+            f'padding:2px 8px;border-radius:4px;font-size:12px;">'
+            f'{model.status}</span>'
+        )
+
+    column_formatters = {
+        "status": lambda m, a: SupplierOrderAdmin.status_badge(m, a),
+    }
+
+    def __str__(self):
+        return f"SupplierOrder#{self.id}"
+
+
+class SupplierSyncLogAdmin(ModelView, model=SupplierSyncLog):
+    """Log of sync operations per supplier (read-only)."""
+    name = "سجل المزامنة"
+    name_plural = "سجل مزامنة الموردين"
+    icon = "fa-solid fa-clock-rotate-left"
+
+    can_create = False
+    can_edit = False
+    can_delete = True
+
+    column_list = [
+        SupplierSyncLog.id,
+        SupplierSyncLog.supplier_id,
+        SupplierSyncLog.started_at,
+        SupplierSyncLog.finished_at,
+        SupplierSyncLog.status,
+        SupplierSyncLog.products_total,
+        SupplierSyncLog.products_added,
+        SupplierSyncLog.products_updated,
+        SupplierSyncLog.products_removed,
+        SupplierSyncLog.price_changes,
+    ]
+    column_sortable_list = [
+        SupplierSyncLog.id,
+        SupplierSyncLog.started_at,
+        SupplierSyncLog.status,
+    ]
+    column_default_sort = [("started_at", True)]
+    column_filters = [
+        SupplierSyncLog.supplier_id,
+        SupplierSyncLog.status,
+    ]
+    column_labels = {
+        "supplier_id": "المورد",
+        "started_at": "بدأت",
+        "finished_at": "انتهت",
+        "status": "الحالة",
+        "products_total": "الإجمالي",
+        "products_added": "مُضاف",
+        "products_updated": "مُحدَّث",
+        "products_removed": "محذوف",
+        "price_changes": "تغيّر السعر",
+    }
+    page_size = 50
+
+    def status_badge(model, _attr) -> Markup:
+        colors = {
+            "running": "#5bc0de",
+            "success": "#5cb85c",
+            "partial": "#f0ad4e",
+            "failed":  "#d9534f",
+        }
+        color = colors.get(model.status, "#666666")
+        return Markup(
+            f'<span style="background:{color};color:#fff;'
+            f'padding:2px 8px;border-radius:4px;font-size:12px;">'
+            f'{model.status}</span>'
+        )
+
+    column_formatters = {
+        "status": lambda m, a: SupplierSyncLogAdmin.status_badge(m, a),
+    }
+
+    def __str__(self):
+        return f"SyncLog#{self.id}"
+
+
+class SupplierProductAdmin(ModelView, model=SupplierProduct):
+    """Products fetched from external suppliers."""
+    name = "منتجات الموردين"
+    name_plural = "منتجات الموردين"
+    icon = "fa-solid fa-boxes-stacked"
+
+    column_list = [
+        SupplierProduct.id,
+        SupplierProduct.supplier_id,
+        SupplierProduct.name,
+        SupplierProduct.category,
+        SupplierProduct.cost_price,
+        SupplierProduct.fixed_profit,
+        SupplierProduct.selling_price,
+        SupplierProduct.manual_price,
+        SupplierProduct.stock,
+        SupplierProduct.is_visible,
+        SupplierProduct.is_available,
+        SupplierProduct.last_synced_at,
+    ]
+    column_searchable_list = [
+        SupplierProduct.name,
+        SupplierProduct.external_id,
+    ]
+    column_sortable_list = [
+        SupplierProduct.id,
+        SupplierProduct.cost_price,
+        SupplierProduct.selling_price,
+        SupplierProduct.stock,
+        SupplierProduct.last_synced_at,
+    ]
+    column_default_sort = [("id", True)]
+    column_filters = [
+        SupplierProduct.supplier_id,
+        SupplierProduct.category,
+        SupplierProduct.is_visible,
+        SupplierProduct.is_available,
+    ]
+    column_labels = {
+        "supplier_id": "المورد",
+        "external_id": "المعرّف الخارجي",
+        "name": "الاسم",
+        "category": "الفئة",
+        "cost_price": "سعر التكلفة",
+        "selling_price": "سعر البيع",
+        "manual_price": "سعر يدوي (نهائي)",
+        "fixed_profit": "ربح ثابت",
+        "stock": "المخزون",
+        "is_visible": "ظاهر",
+        "is_available": "متوفر",
+        "last_synced_at": "آخر مزامنة",
+    }
+    page_size = 50
+
+    def __str__(self):
+        return self.name or ""
+
+
+class SupplierView(ModelView, model=Supplier):
+    """External suppliers (StackVault / Pandora / ...)."""
+    name = "إدارة الموردين"
+    name_plural = "إدارة الموردين"
+    icon = "fa-solid fa-truck"
+
+    column_list = [
+        Supplier.id,
+        Supplier.icon_emoji,
+        Supplier.display_name,
+        Supplier.name,
+        Supplier.api_url,
+        Supplier.profit_margin,
+        Supplier.sync_interval_minutes,
+        Supplier.last_sync_at,
+        Supplier.last_sync_status,
+        Supplier.is_active,
+    ]
+    column_searchable_list = [
+        Supplier.name,
+        Supplier.display_name,
+    ]
+    column_sortable_list = [
+        Supplier.id,
+        Supplier.sort_order,
+        Supplier.is_active,
+        Supplier.last_sync_at,
+    ]
+    column_default_sort = [("sort_order", False), ("id", False)]
+    column_filters = [
+        Supplier.is_active,
+        Supplier.last_sync_status,
+    ]
+    column_labels = {
+        "icon_emoji": "الأيقونة",
+        "display_name": "الاسم المعروض",
+        "name": "الاسم الداخلي",
+        "api_url": "رابط API",
+        "api_key": "مفتاح API",
+        "profit_margin": "هامش الربح %",
+        "style": "اللون",
+        "is_active": "مفعّل",
+        "display_name": "الاسم المعروض",
+        "icon_emoji": "الأيقونة",
+        "sort_order": "الترتيب",
+        "sync_enabled": "المزامنة التلقائية",
+        "sync_interval_minutes": "فاصل المزامنة (دقيقة)",
+        "last_sync_at": "آخر مزامنة",
+        "last_sync_status": "حالة المزامنة",
+        "last_sync_error": "خطأ المزامنة",
+        "last_sync_product_count": "عدد المنتجات",
+        "sync_errors_count": "عدد الأخطاء",
+        "notes": "ملاحظات",
+    }
+    page_size = 25
+
+    form_columns = [
+        Supplier.name,
+        Supplier.display_name,
+        Supplier.icon_emoji,
+        Supplier.api_url,
+        Supplier.api_key,
+        Supplier.profit_margin,
+        Supplier.style,
+        Supplier.sort_order,
+        Supplier.sync_enabled,
+        Supplier.sync_interval_minutes,
+        Supplier.is_active,
+        Supplier.notes,
+    ]
+
+    form_args = {
+        "style": {
+            "choices": [
+                ("success", " أخضر (success)"),
+                ("primary", " أزرق (primary)"),
+                ("danger", " أحمر (danger)"),
+            ],
+        },
+    }
+
+    form_overrides = {
+        "style": SelectField,
+    }
+
+    def sync_status_badge(model: Supplier, _attr) -> Markup:
+        if not model.last_sync_at:
+            return Markup('<span style="color:#999;"> لم يُزامَن</span>')
+        colors = {
+            "success": "#5cb85c",
+            "partial": "#f0ad4e",
+            "failed":  "#d9534f",
+            "running": "#5bc0de",
+        }
+        color = colors.get(model.last_sync_status or "", "#666666")
+        status = model.last_sync_status or "unknown"
+        return Markup(
+            f'<span style="background:{color};color:#fff;'
+            f'padding:2px 8px;border-radius:4px;font-size:12px;">'
+            f'{status}</span>'
+        )
+
+    def interval_label(model: Supplier, _attr) -> str:
+        mins = int(model.sync_interval_minutes or 0)
+        if mins <= 0:
+            return "معطّل"
+        if mins < 60:
+            return f"{mins} دقيقة"
+        hours = mins // 60
+        if hours < 24:
+            return f"{hours} ساعة"
+        days = hours // 24
+        return f"{days} يوم"
+
+    column_formatters = {
+        "last_sync_status": lambda m, a: SupplierView.sync_status_badge(m, a),
+        "sync_interval_minutes": lambda m, a: SupplierView.interval_label(m, a),
+    }
+
+    @action(
+        name="sync_now",
+        label=" مزامنة الآن",
+        confirmation_message="هل تريد مزامنة منتجات هذا المورد الآن؟",
+        add_in_detail=True,
+        add_in_list=True,
+    )
+    async def sync_now_action(self, request) -> None:
+        """Trigger a manual sync for the selected supplier(s)."""
+        from starlette.responses import RedirectResponse
+        try:
+            from bot.misc.services.supplier_sync import sync_supplier
+        except Exception as e:
+            logger.exception("Cannot import sync service: %s", e)
+            return RedirectResponse(request.url_for("admin:list", identity=self.identity), status_code=303)
+
+        # استخرج IDs من pks
+        pks = request.query_params.getlist("pks")
+        if not pks:
+            # جرب "pk"
+            single = request.query_params.get("pk")
+            if single:
+                pks = [single]
+
+        for pk in pks:
+            try:
+                sid = int(pk)
+            except (ValueError, TypeError):
+                continue
+            try:
+                await sync_supplier(sid, manual=True)
+                logger.info("Manual sync triggered for supplier %s", sid)
+            except Exception as e:
+                logger.exception("Manual sync failed for supplier %s: %s", sid, e)
+
+        return RedirectResponse(request.url_for("admin:list", identity=self.identity), status_code=303)
+
+    def __str__(self):
+        return self.display_name or self.name or ""
+
+
+
+class LocalSubscriptionView(ModelView, model=LocalSubscription):
+    name = "الاشتراكات المحلية"
+    name_plural = "الاشتراكات المحلية"
+    icon = "fa-solid fa-box"
+
+    column_list = [
+        LocalSubscription.id,
+        LocalSubscription.name,
+        LocalSubscription.category,
+        "delivery_type_ar",
+        "invite_field_type_ar",
+        "sellable_qty",
+        "codes_available",
+        LocalSubscription.codes_per_purchase,
+        LocalSubscription.price,
+        LocalSubscription.quantity,
+        LocalSubscription.style,
+        LocalSubscription.is_active,
+    ]
+    column_searchable_list = [LocalSubscription.name, LocalSubscription.category]
+    column_sortable_list = [
+        LocalSubscription.id,
+        LocalSubscription.name,
+        LocalSubscription.price,
+        LocalSubscription.quantity,
+        LocalSubscription.is_active,
+    ]
+    column_default_sort = [("id", True)]
+    column_filters = [
+        LocalSubscription.delivery_type,
+        LocalSubscription.category,
+        LocalSubscription.is_active,
+    ]
+    page_size = 25
+
+    column_labels = {
+        "delivery_type": "نوع التسليم",
+        "delivery_type_ar": "نوع التسليم",
+        "invite_field_type": "الحقل المطلوب",
+        "invite_field_type_ar": "الحقل المطلوب",
+        "codes_per_purchase": "الأكواد لكل شراء",
+        "codes_available": "الأكواد المتاحة",
+        "sellable_qty": "قابل للبيع",
+        "quantity": "الكمية (يدوي)",
+        "is_active": "مفعّل",
+    }
+
+    form_columns = [
+        LocalSubscription.name,
+        LocalSubscription.description,
+        LocalSubscription.price,
+        LocalSubscription.category,
+        LocalSubscription.quantity,
+        LocalSubscription.style,
+        LocalSubscription.delivery_type,
+        LocalSubscription.invite_field_type,
+        LocalSubscription.codes_per_purchase,
+        LocalSubscription.is_active,
+    ]
+
+    form_overrides = {
+        "delivery_type": SelectField,
+        "invite_field_type": SelectField,
+        "style": SelectField,
+    }
+
+    form_args = {
+        "delivery_type": {
+            "choices": [
+                ("codes", " تلقائي (توزيع أكواد)"),
+                ("invite", " دعوة بريد إلكتروني"),
+                ("manual", " تسليم يدوي"),
+            ],
+        },
+        "invite_field_type": {
+            "choices": [
+                ("email", " البريد الإلكتروني"),
+                ("phone", " رقم الجوال"),
+                ("username", " اسم المستخدم"),
+                ("telegram_id", " معرّف تيليجرام"),
+                ("text", " نص عام"),
+                ("none", " بدون (يدوي كامل)"),
+            ],
+        },
+        "style": {
+            "choices": [
+                ("success", " أخضر (success)"),
+                ("primary", " أزرق (primary)"),
+                ("danger", " أحمر (danger)"),
+            ],
+        },
+    }
+
+    def delivery_type_label(model: LocalSubscription, _attr) -> str:
+        labels = {
+            "codes": " تلقائي",
+            "invite": " دعوة",
+            "manual": " يدوي",
+        }
+        return labels.get(model.delivery_type or "codes", model.delivery_type or "")
+
+    def codes_available_label(model: LocalSubscription, _attr) -> str:
+        return str(model.free_codes_count)
+
+    def sellable_qty_label(model: LocalSubscription, _attr) -> str:
+        return str(model.sellable_quantity)
+
+    def invite_field_type_label(model: LocalSubscription, _attr) -> str:
+        labels = {
+            "email": " بريد",
+            "phone": " جوال",
+            "username": " مستخدم",
+            "telegram_id": " ID",
+            "text": " نص",
+            "none": " بدون",
+        }
+        return labels.get(model.invite_field_type or "email", model.invite_field_type or "")
+
+    column_formatters = {
+        "delivery_type_ar": lambda m, a: LocalSubscriptionView.delivery_type_label(m, a),
+        "invite_field_type_ar": lambda m, a: LocalSubscriptionView.invite_field_type_label(m, a),
+        "codes_available": lambda m, a: LocalSubscriptionView.codes_available_label(m, a),
+        "sellable_qty": lambda m, a: LocalSubscriptionView.sellable_qty_label(m, a),
+    }
+
+    def list_query(self, request):
+        return super().list_query(request).options(selectinload(LocalSubscription.codes))
+
+    def __str__(self):
+        return self.name or ""
+
+class LocalSubscriptionOrderAdmin(ModelView, model=LocalSubscriptionOrder):
+    """Admin view for local subscription purchase orders."""
+    name = "طلبات الاشتراكات"
+    name_plural = "طلبات الاشتراكات المحلية"
+    icon = "fa-solid fa-receipt"
+
+    column_list = [
+        LocalSubscriptionOrder.id,
+        LocalSubscriptionOrder.user_id,
+        "subscription_name",
+        LocalSubscriptionOrder.quantity,
+        LocalSubscriptionOrder.total_price,
+        LocalSubscriptionOrder.payment_type,
+        LocalSubscriptionOrder.customer_data,
+        LocalSubscriptionOrder.status,
+        LocalSubscriptionOrder.created_at,
+        LocalSubscriptionOrder.decided_at,
+    ]
+    column_searchable_list = [
+        LocalSubscriptionOrder.user_id,
+        LocalSubscriptionOrder.payment_reference,
+    ]
+    column_sortable_list = [
+        LocalSubscriptionOrder.id,
+        LocalSubscriptionOrder.status,
+        LocalSubscriptionOrder.created_at,
+        LocalSubscriptionOrder.decided_at,
+    ]
+    column_default_sort = [("created_at", True)]
+    column_filters = [
+        LocalSubscriptionOrder.status,
+        LocalSubscriptionOrder.payment_type,
+    ]
+    page_size = 25
+
+    column_labels = {
+        "subscription_name": "الاشتراك",
+        "payment_type": "طريقة الدفع",
+        "customer_data": "بيانات العميل",
+        "status": "الحالة",
+        "total_price": "الإجمالي",
+    }
+
+    def status_badge(model: LocalSubscriptionOrder, _attr) -> Markup:
+        colors = {
+            "pending":   "#f0ad4e",
+            "approved":  "#5bc0de",
+            "rejected":  "#d9534f",
+            "completed": "#5cb85c",
+            "cancelled": "#999999",
+        }
+        color = colors.get(model.status, "#666666")
+        return Markup(
+            f'<span style="background:{color};color:#fff;'
+            f'padding:2px 8px;border-radius:4px;font-size:12px;">'
+            f'{model.status}</span>'
+        )
+
+    def subscription_name_label(model: LocalSubscriptionOrder, _attr) -> str:
+        sub = getattr(model, "subscription", None)
+        if sub is not None:
+            return str(sub.name or f"#{model.subscription_id}")
+        return f"#{model.subscription_id}"
+
+    def list_query(self, request):
+        return super().list_query(request).options(joinedload(LocalSubscriptionOrder.subscription))
+
+    column_formatters = {
+        "status": lambda m, a: LocalSubscriptionOrderAdmin.status_badge(m, a),
+        "subscription_name": lambda m, a: LocalSubscriptionOrderAdmin.subscription_name_label(m, a),
+    }
+
+    def __str__(self):
+        return f"Order#{self.id}"
+
+
+class LocalSubscriptionCodeAdmin(ModelView, model=LocalSubscriptionCode):
+    """Admin view for redeemable codes/keys. Filter by subscription for clarity."""
+    name = "أكواد الاشتراكات"
+    name_plural = "أكواد الاشتراكات المحلية"
+    icon = "fa-solid fa-key"
+
+    can_delete = True
+    can_create = True
+    can_edit = True
+
+    column_list = [
+        LocalSubscriptionCode.id,
+        "subscription_name",
+        LocalSubscriptionCode.content,
+        "used_badge_col",
+        "used_by_username",
+        LocalSubscriptionCode.order_id,
+        LocalSubscriptionCode.used_at,
+        LocalSubscriptionCode.created_at,
+    ]
+    column_searchable_list = [
+        LocalSubscriptionCode.content,
+        LocalSubscriptionCode.used_by,
+    ]
+    column_sortable_list = [
+        LocalSubscriptionCode.id,
+        LocalSubscriptionCode.is_used,
+        LocalSubscriptionCode.created_at,
+    ]
+    column_default_sort = [("created_at", True)]
+    column_filters = [
+        LocalSubscriptionCode.subscription,
+        LocalSubscriptionCode.is_used,
+    ]
+    page_size = 50
+
+    column_labels = {
+        "subscription_name": "الاشتراك",
+        "subscription": "الاشتراك",
+        "content": "الكود / المحتوى",
+        "used_badge_col": "الحالة",
+        "used_by_username": "استخدمه",
+        "order_id": "الطلب",
+        "used_at": "تاريخ الاستخدام",
+        "created_at": "تاريخ الإضافة",
+    }
+
+    form_columns = [
+        LocalSubscriptionCode.subscription_id,
+        LocalSubscriptionCode.content,
+        LocalSubscriptionCode.is_used,
+        LocalSubscriptionCode.used_by,
+        LocalSubscriptionCode.order_id,
+    ]
+
+    def subscription_name_label(model: LocalSubscriptionCode, _attr) -> str:
+        sub = getattr(model, "subscription", None)
+        if sub is not None:
+            return str(sub.name or f"#{model.subscription_id}")
+        return f"#{model.subscription_id}"
+
+    def used_badge(model: LocalSubscriptionCode, _attr) -> Markup:
+        if model.is_used:
+            return Markup('<span style="background:#d9534f;color:#fff;padding:2px 8px;border-radius:4px;font-size:12px;"> مستخدم</span>')
+        return Markup('<span style="background:#5cb85c;color:#fff;padding:2px 8px;border-radius:4px;font-size:12px;"> متاح</span>')
+
+    def used_by_username_label(model: LocalSubscriptionCode, _attr) -> str:
+        if not model.used_by:
+            return ""
+        return f"@{model.used_by}"
+
+    def list_query(self, request):
+        return super().list_query(request).options(joinedload(LocalSubscriptionCode.subscription))
+
+    column_formatters = {
+        "subscription_name": lambda m, a: LocalSubscriptionCodeAdmin.subscription_name_label(m, a),
+        "used_badge_col": lambda m, a: LocalSubscriptionCodeAdmin.used_badge(m, a),
+        "used_by_username": lambda m, a: LocalSubscriptionCodeAdmin.used_by_username_label(m, a),
+    }
+
+
+
+class BotButtonView(ModelView, model=BotButton):
+    column_list = [BotButton.id, BotButton.menu_name, BotButton.button_text, BotButton.callback_data, BotButton.url, BotButton.style, BotButton.sort_order, BotButton.is_active]
+    column_searchable_list = [BotButton.button_text, BotButton.menu_name, BotButton.callback_data]
+    column_sortable_list = [BotButton.id, BotButton.menu_name, BotButton.sort_order, BotButton.is_active]
+    name = "أزرار البوت"
+    name_plural = "إدارة أزرار البوت"
+    icon = "fa-solid fa-gamepad"
+
+
+class PaymentMethodView(ModelView, model=PaymentMethod):
+    column_list = [PaymentMethod.id, PaymentMethod.name, PaymentMethod.style, PaymentMethod.account_info, PaymentMethod.is_active]
+    column_searchable_list = [PaymentMethod.name]
+    name = "طرق الدفع"
+    name_plural = "إدارة طرق الدفع"
+    icon = "fa-solid fa-money-bill-transfer"
+
+
 def create_admin_app(bot: Any = None) -> Starlette:
     """Build the admin panel app."""
     set_notifier_bot(bot)
@@ -865,18 +1660,24 @@ def create_admin_app(bot: Any = None) -> Starlette:
 
     admin.add_view(UserAdmin)
     admin.add_view(RoleAdmin)
-    admin.add_view(CategoryAdmin)
-    admin.add_view(GoodsAdmin)
-    admin.add_view(ItemValuesAdmin)
     admin.add_view(BoughtGoodsAdmin)
     admin.add_view(OperationsAdmin)
     admin.add_view(PaymentsAdmin)
     admin.add_view(ReferralEarningsAdmin)
     admin.add_view(AuditLogAdmin)
     admin.add_view(PromoCodeAdmin)
-    admin.add_view(CartItemsAdmin)
-    admin.add_view(StackVaultPricingView)
-    if EnvKeys.REVIEWS_ENABLED == "1":
-        admin.add_view(ReviewsAdmin)
+    admin.add_view(SupplierView)
+    admin.add_view(SupplierProductAdmin)
+    admin.add_view(SupplierProductsBrowserView)
+    admin.add_view(SupplierPricingRuleAdmin)
+    admin.add_view(SupplierCategoryMarkupAdmin)
+    admin.add_view(SupplierPriceOverrideAdmin)
+    admin.add_view(SupplierOrderAdmin)
+    admin.add_view(SupplierSyncLogAdmin)
+    admin.add_view(LocalSubscriptionView)
+    admin.add_view(LocalSubscriptionCodeAdmin)
+    admin.add_view(LocalSubscriptionOrderAdmin)
+    admin.add_view(BotButtonView)
+    admin.add_view(PaymentMethodView)
 
     return app

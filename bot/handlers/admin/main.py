@@ -25,7 +25,7 @@ async def console_callback_handler(call: CallbackQuery, state: FSMContext):
         maintenance = mw.maintenance_mode if mw else False
         await call.message.edit_text(
             localize("admin.menu.main"),
-            reply_markup=admin_console_keyboard(maintenance_mode=maintenance, role=role),
+            reply_markup=await admin_console_keyboard(maintenance_mode=maintenance, role=role),
         )
     else:
         await call.answer(localize("admin.menu.rights"))
@@ -58,5 +58,5 @@ async def toggle_maintenance_handler(call: CallbackQuery):
     role = await check_role_cached(call.from_user.id)
     await call.message.edit_text(
         localize("admin.menu.main"),
-        reply_markup=admin_console_keyboard(maintenance_mode=mw.maintenance_mode, role=role),
+        reply_markup=await admin_console_keyboard(maintenance_mode=mw.maintenance_mode, role=role),
     )

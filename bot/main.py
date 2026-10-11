@@ -21,11 +21,13 @@ from bot.handlers import register_all_handlers
 from bot.database.models import register_models
 from bot.logger_mesh import configure_logging
 from bot.middleware import setup_rate_limiting, RateLimitConfig, I18nMiddleware
+from bot.middleware.dispatcher_ctx import DispatcherMiddleware
 from bot.middleware.security import SecurityMiddleware, AuthenticationMiddleware, set_auth_middleware
 from bot.misc.caching import init_cache_manager, get_cache_manager
 from bot.misc.caching import CacheScheduler
 from bot.misc.caching import get_redis_storage
 from bot.misc.services import RecoveryManager, CleanupManager
+from bot.misc.services.supplier_scheduler import get_scheduler
 from bot.misc.metrics import init_metrics, get_metrics, AnalyticsMiddleware
 from bot.database.main import Database as _Database
 
@@ -64,6 +66,10 @@ def _register_middlewares(
         security_middleware: SecurityMiddleware,
 ) -> None:
     """Register non-rate-limit middlewares."""
+    # Inject Dispatcher into all handlers
+
+    dp.update.outer_middleware(DispatcherMiddleware(dp))
+
     dp.message.middleware(i18n_middleware)
     dp.callback_query.middleware(i18n_middleware)
 
@@ -164,6 +170,13 @@ async def _startup(dp: Dispatcher, bot: Bot, ctx: AppContext, storage) -> None:
     logging.info(f"Recovery and admin panel initialized on {EnvKeys.ADMIN_HOST}:{EnvKeys.ADMIN_PORT}")
 
 
+    # Start supplier auto-sync scheduler
+    try:
+        get_scheduler().start()
+        logging.info("Supplier sync scheduler started")
+    except Exception as e:
+        logging.error(f"Failed to start supplier scheduler: {e}")
+
 async def warm_up_critical_caches():
     """Warming of critical caches at startup"""
     from bot.database.methods.read import (
@@ -255,6 +268,14 @@ async def _shutdown(ctx: AppContext, bot: Bot) -> None:
 # Run loop
 # ---------------------------------------------------------------------------
 
+    # Stop supplier auto-sync scheduler
+    try:
+        await get_scheduler().stop()
+        logging.info("Supplier sync scheduler stopped")
+    except Exception as e:
+        logging.error(f"Failed to stop supplier scheduler: {e}")
+
+
 def _configure_logging() -> None:
     configure_logging(
         console=EnvKeys.LOG_TO_STDOUT == "1",
@@ -286,7 +307,6 @@ def _install_shutdown_signals(callback) -> None:
                 signal.signal(sig, lambda *_: loop.call_soon_threadsafe(callback))
             except (ValueError, OSError):
                 logging.warning("Could not install a shutdown handler for %s", sig)
-
 
 async def _run_webhook(dp: Dispatcher, bot: Bot, ctx: AppContext) -> None:
     """Run in webhook mode on a dedicated app and port.

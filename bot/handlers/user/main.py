@@ -17,12 +17,72 @@ from bot.database.methods.read import get_cart_count, invalidate_user_cache
 from bot.database.methods.lazy_queries import query_user_operations_history
 from bot.handlers.other import check_sub_channel, _parse_channel_username
 from bot.keyboards import main_menu, back, profile_keyboard, check_sub, language_menu
+from bot.keyboards.inline import profile_keyboard_async
 from bot.misc import EnvKeys
 from bot.misc.metrics import get_metrics
 from bot.i18n import localize, set_current_locale, set_user_cache_locale, SUPPORTED_LOCALES
 from bot.logger_mesh import logger
 
 router = Router()
+NL = chr(10)
+
+
+async def _build_welcome_text(user_id: int, first_name: str = "") -> str:
+    """Build a rich welcome message with user stats (unicode-safe)."""
+    from bot.database.main import Database as _DB
+    from bot.database.models.main import User as _User, BoughtGoods as _Bought
+    from sqlalchemy import select as _select, func as _func
+
+    # Unicode codepoints (safe from PowerShell stripping)
+    EMOJI_STAR = chr(0x1F31F)       # star
+    EMOJI_DIAMOND = chr(0x1F48E)    # diamond
+    EMOJI_GIFT = chr(0x1F381)       # gift
+    EMOJI_ROCKET = chr(0x1F680)     # rocket
+    EMOJI_WAVE = chr(0x1F44B)       # wave
+    SEPARATOR = chr(0x2501) * 18    # heavy horizontal line
+
+    balance_str = "0.00"
+    purchases_count = 0
+
+    try:
+        async with _DB().session() as session:
+            user = (await session.execute(
+                _select(_User).where(_User.telegram_id == user_id)
+            )).scalar_one_or_none()
+            if user is not None and user.balance is not None:
+                balance_str = f"{user.balance:.2f}"
+
+            cnt_result = await session.execute(
+                _select(_func.count(_Bought.id)).where(_Bought.buyer_id == user_id)
+            )
+            purchases_count = int(cnt_result.scalar() or 0)
+    except Exception:
+        pass
+
+    name = (first_name or "").strip() or "عزيزي"
+
+    if purchases_count == 0:
+        purchases_str = "لا توجد مشتريات"
+    elif purchases_count == 1:
+        purchases_str = "مشترى واحد"
+    elif purchases_count == 2:
+        purchases_str = "مشترى اثنان"
+    elif purchases_count <= 10:
+        purchases_str = f"{purchases_count} مشتريات"
+    else:
+        purchases_str = f"{purchases_count} مشترى"
+
+    lines = [
+        SEPARATOR,
+        f"{EMOJI_STAR} <b>أهلاً بك، {name}!</b> {EMOJI_STAR}",
+        SEPARATOR,
+        f"{EMOJI_DIAMOND} رصيدك: <b>{balance_str}$</b>",
+        f"{EMOJI_GIFT} مشترياتك: <b>{purchases_str}</b>",
+        SEPARATOR,
+        "",
+        f"{EMOJI_ROCKET} <i>اختر من القائمة أدناه:</i>",
+    ]
+    return NL.join(lines)
 
 
 async def _ensure_user(user_id: int, tg_lang: str | None = None) -> dict | None:
@@ -159,8 +219,12 @@ async def start(message: Message, state: FSMContext):
             await _delete_quietly(message)
             return
 
-    markup = main_menu(role=role_data, channel=channel_username, helper=EnvKeys.HELPER_ID)
-    await message.answer(localize("menu.title"), reply_markup=markup)
+    markup = await main_menu(role=role_data, channel=channel_username, helper=EnvKeys.HELPER_ID)
+
+    # Rich welcome message
+    welcome_text = await _build_welcome_text(user_id, message.from_user.first_name or "")
+
+    await message.answer(welcome_text, reply_markup=markup, parse_mode="HTML")
     await _delete_quietly(message)
     await state.clear()
 
@@ -168,7 +232,7 @@ async def start(message: Message, state: FSMContext):
 @router.callback_query(F.data == "back_to_menu")
 async def back_to_menu_callback_handler(call: CallbackQuery, state: FSMContext):
     """
-    Return user to the main menu.
+    Return user to the main menu with rich welcome.
     """
     user_id = call.from_user.id
     await _ensure_user(user_id)
@@ -177,9 +241,48 @@ async def back_to_menu_callback_handler(call: CallbackQuery, state: FSMContext):
 
     channel_username = _parse_channel_username()
 
-    markup = main_menu(role=role, channel=channel_username, helper=EnvKeys.HELPER_ID)
-    await call.message.edit_text(localize("menu.title"), reply_markup=markup)
+    markup = await main_menu(role=role, channel=channel_username, helper=EnvKeys.HELPER_ID)
+
+    # Rich welcome
+    first_name = ""
+    try:
+        first_name = call.from_user.first_name or ""
+    except Exception:
+        pass
+
+    welcome_text = await _build_welcome_text(user_id, first_name)
+
+    # DEBUG ENABLED
+    try:
+        from bot.logger_mesh import logger as _lgr
+        _lgr.info(f"WELCOME: user_id={user_id} name={first_name}")
+        _lgr.info(f"WELCOME text preview: {welcome_text[:150] if welcome_text else 'EMPTY'}")
+        await call.message.edit_text(welcome_text, reply_markup=markup, parse_mode="HTML")
+    except Exception as _e:
+        from bot.logger_mesh import logger as _lgr
+        import traceback
+        _lgr.error(f"WELCOME FAILED: {type(_e).__name__}: {_e}")
+        _lgr.error(f"TRACEBACK: {traceback.format_exc()}")
+        # fallback
+        try:
+            await call.message.edit_text(localize("menu.title"), reply_markup=markup)
+        except Exception as _e2:
+            _lgr.error(f"FALLBACK FAILED: {_e2}")
     await state.clear()
+
+
+@router.callback_query(F.data.startswith("back:"))
+async def back_to_menu_prefixed_handler(call: CallbackQuery, state: FSMContext):
+    """Unified handler for prefixed back buttons (back:profile, back:admin, etc.).
+
+    Behaves identically to back_to_menu.
+    """
+    try:
+        await back_to_menu_callback_handler(call, state)
+    except Exception:
+        # fallback: reset to main menu without edit
+        await call.answer()
+        await state.clear()
 
 
 @router.callback_query(F.data == "choose_language")
@@ -211,7 +314,7 @@ async def set_language_callback_handler(call: CallbackQuery, state: FSMContext):
 
     role = await check_role_cached(user_id) or 0
     channel_username = _parse_channel_username()
-    markup = main_menu(role=role, channel=channel_username, helper=EnvKeys.HELPER_ID)
+    markup = await main_menu(role=role, channel=channel_username, helper=EnvKeys.HELPER_ID)
     await call.message.edit_text(localize("menu.title"), reply_markup=markup)
     await state.clear()
 
@@ -249,7 +352,21 @@ async def profile_callback_handler(call: CallbackQuery, state: FSMContext):
     )
     referral = EnvKeys.REFERRAL_PERCENT
 
-    markup = profile_keyboard(referral, items, cart_count=cart_count)
+    # Use dynamic keyboard for the user's current locale
+    try:
+        from bot.i18n import get_user_locale as _get_locale
+        _locale = _get_locale(user_id) or "ar"
+    except Exception:
+        _locale = "ar"
+
+    try:
+        markup = await profile_keyboard_async(
+            referral, items, cart_count=cart_count, locale=_locale,
+        )
+    except Exception as _e:
+        from bot.logger_mesh import logger as _logger
+        _logger.warning("profile_keyboard_async failed: %s", _e)
+        markup = profile_keyboard(referral, items, cart_count=cart_count)
     text = (
         f"{localize('profile.caption', name=_esc(tg_user.first_name or ''), id=user_id)}\n"
         f"{localize('profile.id', id=user_id)}\n"
@@ -279,7 +396,7 @@ async def check_sub_to_channel(call: CallbackQuery, state: FSMContext):
         if await _is_subscribed(call.bot, channel_username, user_id) is not False:
             await _ensure_user(user_id)
             role = await check_role_cached(user_id) or 0
-            markup = main_menu(role, channel_username, helper)
+            markup = await main_menu(role, channel_username, helper)
             await call.message.edit_text(localize("menu.title"), reply_markup=markup)
             await state.clear()
             return

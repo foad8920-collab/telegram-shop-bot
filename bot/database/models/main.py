@@ -6,6 +6,7 @@ from sqlalchemy import (
     Integer, String, BigInteger, ForeignKey, Text, Boolean,
     DateTime, Numeric, Index, UniqueConstraint, CheckConstraint, func, select
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 from bot.database.main import Database
 
@@ -511,4 +512,419 @@ async def register_models():
     await Role.insert_roles()
 
 
+
+
+
+class Supplier(Database.BASE):
+    __tablename__ = 'suppliers'
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    api_url: Mapped[str] = mapped_column(String(255), nullable=False)
+    api_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    profit_margin: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=0)
+    style: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, default='primary')
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+
+    # --- Presentation ---
+    display_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    icon_emoji: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default='0')
+
+    # --- Sync settings ---
+    sync_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default='true')
+    sync_interval_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=240, server_default='240')
+    last_sync_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_sync_status: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    last_sync_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    last_sync_product_count: Mapped[Optional[int]] = mapped_column(Integer, default=0)
+    sync_errors_count: Mapped[Optional[int]] = mapped_column(Integer, default=0)
+
+    # --- Notes ---
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    def __str__(self):
+        return self.display_name or self.name or ""
+
+
+
+class LocalSubscription(Database.BASE):
+    __tablename__ = 'local_subscriptions'
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    category: Mapped[str] = mapped_column(String(100), default='عام')
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
+    style: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, default='success')
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+
+    # Delivery configuration
+    delivery_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, default='codes', server_default='codes',
+    )  # codes | invite | manual
+    codes_per_purchase: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default='1',
+    )
+
+    # Type of data to request from buyer for invite/manual delivery:
+    # email | phone | username | telegram_id | text | none
+    invite_field_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, default='email', server_default='email',
+    )
+
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    # Relationship: all codes for this subscription
+    codes: Mapped[list["LocalSubscriptionCode"]] = relationship(
+        "LocalSubscriptionCode",
+        foreign_keys="LocalSubscriptionCode.subscription_id",
+        lazy="selectin",
+        viewonly=True,
+    )
+
+    @property
+    def free_codes_count(self) -> int:
+        """Count of unused codes."""
+        try:
+            return sum(1 for c in self.codes if not c.is_used)
+        except Exception:
+            return 0
+
+    @property
+    def sellable_quantity(self) -> int:
+        """Sellable units based on delivery type."""
+        dt = (self.delivery_type or "codes").lower()
+        if dt == "codes":
+            cpp = max(1, int(self.codes_per_purchase or 1))
+            return self.free_codes_count // cpp
+        return int(self.quantity or 0)
+
+    def __str__(self):
+        return self.name or ""
+
+class BotButton(Database.BASE):
+    __tablename__ = 'bot_buttons'
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    menu_name: Mapped[str] = mapped_column(String(60), default='القائمة الرئيسية', server_default='القائمة الرئيسية')
+    menu_name: Mapped[str] = mapped_column(String(60), default='القائمة الرئيسية', server_default='القائمة الرئيسية')
+    style: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, default='primary')
+    icon_custom_emoji_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    button_text: Mapped[str] = mapped_column(String(100), nullable=False)
+    callback_data: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    url: Mapped[Optional[str]] = mapped_column(String(255))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    def __str__(self):
+        return self.button_text or ""
+
+
+class PaymentMethod(Database.BASE):
+    __tablename__ = 'payment_methods'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    account_info: Mapped[str] = mapped_column(Text, nullable=False)
+    style: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, default='primary')
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+
+    def __str__(self):
+        return self.name or ""
+
+
+# ============================================================
+#  Local Subscriptions  Orders & Codes
+# ============================================================
+
+class LocalSubscriptionOrder(Database.BASE):
+    """Purchase order for a local subscription.
+
+    Flow:
+      pending   -> user created order (waiting for admin or auto-approval)
+      approved  -> admin approved / binance auto-verified
+      rejected  -> admin rejected
+      completed -> content delivered to user
+      cancelled -> user cancelled
+    """
+    __tablename__ = 'local_subscription_orders'
+    __table_args__ = (
+        CheckConstraint('quantity > 0', name='ck_lso_quantity_positive'),
+        Index('idx_lso_user_status', 'user_id', 'status'),
+        Index('idx_lso_status', 'status'),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey('users.telegram_id'), nullable=False)
+    subscription_id: Mapped[int] = mapped_column(BigInteger, ForeignKey('local_subscriptions.id'), nullable=False)
+
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    unit_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    total_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+
+    payment_method_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey('payment_methods.id'), nullable=True)
+    payment_type: Mapped[str] = mapped_column(String(30), nullable=False)  # balance | binance | wallet
+
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default='pending', server_default='pending')
+
+    payment_reference: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    payment_proof_file_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+
+    admin_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    admin_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    decided_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    delivered_content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Buyer-provided data for invite/manual subscriptions (email/phone/etc.)
+    customer_data: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+    # State flags for invite flow (survives bot restart)
+    awaiting_data: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default='false',
+    )
+    awaiting_field_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+
+    subscription: Mapped["LocalSubscription"] = relationship(
+        "LocalSubscription",
+        lazy="joined",
+        foreign_keys=[subscription_id],
+    )
+
+    def __str__(self):
+        return f"Order#{self.id} ({self.status})"
+
+
+class LocalSubscriptionCode(Database.BASE):
+    """One redeemable code/key per subscription unit."""
+    __tablename__ = 'local_subscription_codes'
+    __table_args__ = (
+        Index('idx_lsc_sub_unused', 'subscription_id', 'is_used'),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    subscription_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey('local_subscriptions.id', ondelete='CASCADE'), nullable=False,
+    )
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    is_used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default='false')
+    used_by: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    order_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey('local_subscription_orders.id'), nullable=True,
+    )
+    used_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    subscription: Mapped["LocalSubscription"] = relationship(
+        "LocalSubscription", lazy="joined", foreign_keys=[subscription_id]
+    )
+
+    def __str__(self):
+        preview = (self.content or "")[:30]
+        state = "USED" if self.is_used else "FREE"
+        return f"[{state}] {preview}"
+
+# ============================================================
+#  END Local Subscriptions
+# ============================================================
+
+
+# ============================================================
+#  Supplier Products, Pricing, Orders & Sync Logs
+# ============================================================
+
+class SupplierProduct(Database.BASE):
+    """Cached product from an external supplier (StackVault/Pandora/...)."""
+    __tablename__ = 'supplier_products'
+    __table_args__ = (
+        UniqueConstraint('supplier_id', 'external_id', name='uq_sp_supplier_external'),
+        Index('idx_sp_supplier_visible', 'supplier_id', 'is_visible', 'is_available'),
+        Index('idx_sp_synced', 'last_synced_at'),
+        Index('idx_sp_category', 'supplier_id', 'category'),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    supplier_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey('suppliers.id', ondelete='CASCADE'), nullable=False,
+    )
+    external_id: Mapped[str] = mapped_column(String(100), nullable=False)
+
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    image_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    category: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
+    cost_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    selling_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2), nullable=True)
+    manual_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2), nullable=True)
+    fixed_profit: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2), nullable=False, default=0, server_default='0',
+    )
+    currency: Mapped[Optional[str]] = mapped_column(String(10), default='USD')
+
+    stock: Mapped[Optional[int]] = mapped_column(Integer, default=0)
+    is_unlimited: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    is_available: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_visible: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    raw_data: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    last_synced_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    def __str__(self):
+        return self.name or ""
+
+
+class SupplierPricingRule(Database.BASE):
+    """Global pricing rules for a supplier (percent/fixed markup)."""
+    __tablename__ = 'supplier_pricing_rules'
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    supplier_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey('suppliers.id', ondelete='CASCADE'), nullable=False, unique=True,
+    )
+
+    markup_percent: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), default=30)
+    markup_fixed: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2), default=0)
+    min_margin_percent: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), default=5)
+    default_fixed_profit: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2), nullable=False, default=0, server_default='0',
+    )
+    min_selling_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2), nullable=True)
+    max_selling_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2), nullable=True)
+    round_to: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), default=0.01)
+
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    def __str__(self):
+        return f"Pricing[{self.supplier_id}] {self.markup_percent}%"
+
+
+class SupplierCategoryMarkup(Database.BASE):
+    """Category-specific markup override for a supplier."""
+    __tablename__ = 'supplier_category_markups'
+    __table_args__ = (
+        UniqueConstraint('supplier_id', 'category_keyword', name='uq_scm_supplier_category'),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    supplier_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey('suppliers.id', ondelete='CASCADE'), nullable=False,
+    )
+    category_keyword: Mapped[str] = mapped_column(String(100), nullable=False)
+    markup_percent: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, default=0)
+    fixed_profit: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2), nullable=False, default=0, server_default='0',
+    )
+
+    def __str__(self):
+        return f"{self.category_keyword}: +{self.markup_percent}%"
+
+
+class SupplierPriceOverride(Database.BASE):
+    """A fixed price override for a specific product."""
+    __tablename__ = 'supplier_price_overrides'
+    __table_args__ = (
+        UniqueConstraint('supplier_id', 'external_id', name='uq_spo_supplier_external'),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    supplier_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey('suppliers.id', ondelete='CASCADE'), nullable=False,
+    )
+    external_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    fixed_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    def __str__(self):
+        return f"Override[{self.supplier_id}:{self.external_id}] -> {self.fixed_price}"
+
+
+class SupplierOrder(Database.BASE):
+    """Purchase order for a supplier product (reserved for future automation)."""
+    __tablename__ = 'supplier_orders'
+    __table_args__ = (
+        Index('idx_so_supplier', 'supplier_id', 'created_at'),
+        Index('idx_so_status', 'status'),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    supplier_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey('suppliers.id'), nullable=False,
+    )
+    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    product_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey('supplier_products.id'), nullable=False,
+    )
+
+    external_order_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    quantity: Mapped[Optional[int]] = mapped_column(Integer, default=1)
+
+    cost_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2), nullable=True)
+    selling_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2), nullable=True)
+    profit: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2), nullable=True)
+
+    status: Mapped[Optional[str]] = mapped_column(String(30), default='pending')
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    response_data: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+    completed_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    def __str__(self):
+        return f"SupplierOrder#{self.id} [{self.status}]"
+
+
+class SupplierSyncLog(Database.BASE):
+    """Log entry for each sync operation."""
+    __tablename__ = 'supplier_sync_logs'
+    __table_args__ = (
+        Index('idx_ssl_supplier', 'supplier_id', 'started_at'),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    supplier_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey('suppliers.id', ondelete='CASCADE'), nullable=False,
+    )
+
+    started_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+    finished_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+
+    products_total: Mapped[Optional[int]] = mapped_column(Integer, default=0)
+    products_added: Mapped[Optional[int]] = mapped_column(Integer, default=0)
+    products_updated: Mapped[Optional[int]] = mapped_column(Integer, default=0)
+    products_removed: Mapped[Optional[int]] = mapped_column(Integer, default=0)
+    price_changes: Mapped[Optional[int]] = mapped_column(Integer, default=0)
+
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    details: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+
+    def __str__(self):
+        return f"Sync[{self.supplier_id}] {self.status} @ {self.started_at}"
+
+# ============================================================
+#  END Supplier Models
+# ============================================================
 
