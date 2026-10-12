@@ -358,7 +358,7 @@ async def shop_callback_handler(call: CallbackQuery, state: FSMContext):
     if metrics:
         metrics.track_conversion("purchase_funnel", "view_shop", call.from_user.id)
     async with Database().session() as session:
-        res = await session.execute(select(Supplier).filter_by(is_active=True).order_by(Supplier.id))
+        res = await session.execute(select(Supplier).filter_by(is_active=True).order_by(Supplier.sort_order, Supplier.id))
         suppliers = res.scalars().all()
     await call.message.edit_text("اختر مصدر الاشتراك:", reply_markup=shop_source_keyboard(suppliers))
 

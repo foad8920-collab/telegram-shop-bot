@@ -56,17 +56,24 @@ def shop_source_keyboard(suppliers=None) -> InlineKeyboardMarkup:
     if suppliers:
         for supplier in suppliers:
             sup_style = getattr(supplier, 'style', None) or 'primary'
+            display = getattr(supplier, 'display_name', None) or supplier.name
             if getattr(supplier, 'api_url', '') == "local://subscriptions":
-                kb.row(InlineKeyboardButton(text=supplier.name, callback_data="shop_local", style=sup_style))
+                kb.row(InlineKeyboardButton(
+                    text=display,
+                    callback_data="shop_local",
+                    style=sup_style
+                ))
             else:
-                kb.row(InlineKeyboardButton(text=f" اشتراكات {supplier.name}", callback_data=f"shop_supplier_{supplier.id}", style=sup_style))
-    else:
-        # إذا لم يتم تمرير الموردين تُعرض الخيارات الافتراضية فوراً دون تأخير
-        kb.row(InlineKeyboardButton(text=" اشتراكات StackVault", callback_data="shop_supplier_1", style="primary"))
-        kb.row(InlineKeyboardButton(text=" اشتراكات Pandora", callback_data="shop_supplier_2", style="primary"))
-        kb.row(InlineKeyboardButton(text="الاشتراكات المحلية", callback_data="shop_local", style="success"))
-
-    kb.row(InlineKeyboardButton(text=" رجوع", callback_data="back_to_menu", style="primary"))
+                kb.row(InlineKeyboardButton(
+                    text=f"اشتراكات {display}",
+                    callback_data=f"shop_supplier_{supplier.id}",
+                    style=sup_style
+                ))
+    kb.row(InlineKeyboardButton(
+        text="🔙 رجوع",
+        callback_data="back_to_menu",
+        style="primary"
+    ))
     return kb.as_markup()
 
 def subscription_store_keyboard(products: list[dict], page: int, total_pages: int) -> InlineKeyboardMarkup:
