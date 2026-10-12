@@ -85,6 +85,39 @@ async def _build_welcome_text(user_id: int, first_name: str = "") -> str:
     return NL.join(lines)
 
 
+async def _count_all_purchases(user_id: int) -> int:
+    """Count total purchases across ALL sources (general + suppliers + local)."""
+    from bot.database.main import Database as _DB3
+    from bot.database.models.main import (
+        BoughtGoods as _BG2,
+        SupplierOrder as _SO2,
+        LocalSubscriptionOrder as _LO2,
+    )
+    from sqlalchemy import select as _sel2, func as _fn2
+
+    total = 0
+    try:
+        async with _DB3().session() as _sess:
+            r1 = await _sess.execute(
+                _sel2(_fn2.count()).select_from(_BG2).where(_BG2.buyer_id == user_id)
+            )
+            total += int(r1.scalar() or 0)
+
+            r2 = await _sess.execute(
+                _sel2(_fn2.count()).select_from(_SO2).where(_SO2.user_id == user_id)
+            )
+            total += int(r2.scalar() or 0)
+
+            r3 = await _sess.execute(
+                _sel2(_fn2.count()).select_from(_LO2).where(_LO2.user_id == user_id)
+            )
+            total += int(r3.scalar() or 0)
+    except Exception:
+        pass
+
+    return total
+
+
 async def _ensure_user(user_id: int, tg_lang: str | None = None) -> dict | None:
     """Return the user's row, registering them first if it is missing.
 
@@ -347,7 +380,7 @@ async def profile_callback_handler(call: CallbackQuery, state: FSMContext):
     balance = user_info.get('balance')
     overall_balance, items, cart_count = await asyncio.gather(
         select_user_operations_total(user_id),
-        select_user_items(user_id),
+        _count_all_purchases(user_id),
         get_cart_count(user_id),
     )
     referral = EnvKeys.REFERRAL_PERCENT

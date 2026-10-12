@@ -8,7 +8,10 @@ from .local_buy import router as local_buy_router
 from .local_buy_receipts import router as local_buy_receipts_router
 from .local_buy_admin import router as local_buy_admin_router
 from .supplier_products import router as supplier_products_router
+from .supplier_buy import router as supplier_buy_router
+from .supplier_buy_admin import router as supplier_buy_admin_router
 from .shop_search import router as shop_search_router
+from .my_purchases import router as my_purchases_router
 
 from aiogram import Router
 
@@ -23,4 +26,7 @@ router.include_router(local_buy_router)
 router.include_router(local_buy_receipts_router)
 router.include_router(local_buy_admin_router)
 router.include_router(supplier_products_router)
+router.include_router(supplier_buy_router)
+router.include_router(supplier_buy_admin_router)
 router.include_router(shop_search_router)
+router.include_router(my_purchases_router)

@@ -1,13 +1,10 @@
-### Python template
-# Byte-compiled / optimized / DLL files
+# ============================================================
+#  Python
+# ============================================================
 __pycache__/
 *.py[cod]
 *$py.class
-
-# C extensions
 *.so
-
-# Distribution / packaging
 .Python
 build/
 develop-eggs/
@@ -21,125 +18,143 @@ parts/
 sdist/
 var/
 wheels/
-share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
 MANIFEST
 
-# PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
-*.manifest
-*.spec
-
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
-.pytest_cache/
-cover/
-
-# Translations
-*.mo
-*.pot
-
-# Django stuff:
-*.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
-
-# Flask stuff:
-instance/
-.webassets-cache
-
-# Scrapy stuff:
-.scrapy
-
-# Sphinx documentation
-docs/_build/
-
-# PyBuilder
-.pybuilder/
-target/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# IPython
-profile_default/
-ipython_config.py
-
-# pyenv
-#   For a library or package, you might want to ignore these files since the code is
-#   intended to run in multiple environments; otherwise, check them in:
-# .python-version
-
-# pipenv
-#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
-#   However, in case of collaboration, if having platform-specific dependencies or dependencies
-#   having no cross-platform support, pipenv may install dependencies that don't work, or not
-#   install all needed dependencies.
-#Pipfile.lock
-
-# PEP 582; used by e.g. github.com/David-OConnor/pyflow
-__pypackages__/
-
-# Celery stuff
-celerybeat-schedule
-celerybeat.pid
-
-# SageMath parsed files
-*.sage.py
-
-# Environments
-.env
-.venv
-env/
+# ============================================================
+#  Virtual Environments
+# ============================================================
+.venv/
 venv/
 ENV/
-env.bak/
-venv.bak/
+env/
+.python-version
 
-# Spyder project settings
-.spyderproject
-.spyproject
+# ============================================================
+#  Environment Variables (CRITICAL - never commit!)
+# ============================================================
+.env
+.env.local
+.env.*.local
+*.env
+!.env.example
 
-# Rope project settings
-.ropeproject
+# ============================================================
+#  IDE / Editors
+# ============================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
 
-# mkdocs documentation
-/site
+# ============================================================
+#  OS
+# ============================================================
+.DS_Store
+Thumbs.db
+desktop.ini
 
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
+# ============================================================
+#  Backups and Temporary Files
+# ============================================================
+*.backup_*
+*.backup
+*_backup.json
+*_backup.py
+backup_*.json
+backup_*.py
+*_temp.py
+*_temp.json
+temp_*.py
+temp_*.json
 
-# Pyre type checker
-.pyre/
+# ============================================================
+#  Session / Diagnostic Scripts
+# ============================================================
+fix_*.py
+check_*.py
+test_*_temp.py
+make_*.py
+verify_*.py
+diag*.py
+debug_*.py
+inspect_*.py
+setup_*.py
+migrate_*.py
+add_*.py
+update_*.py
+remove_*.py
+redesign_*.py
+do_*.py
+build_*.py
+create_*.py
+reset_*.py
+set_*.py
+reg_*.py
+dynamic_*.py
+smart_*.py
+hybrid_*.py
+improve_*.py
+dual_*.py
+final_*.py
+adjust_*.py
+enable_*.py
+disable_*.py
+extend_*.py
+auto_*.py
+sync_*.py
+preserve_*.py
+count_*.py
+list_*.py
+seed_*.py
+close_*.py
+start_*.py
+inventory.py
+cleanup.py
 
-# pytype static type analyzer
-.pytype/
+# NOTE: tests/test_*.py are legitimate test files - keep them
+!tests/test_*.py
+!tests/conftest.py
 
-# Cython debug symbols
-cython_debug/
+# ============================================================
+#  Data / Cache
+# ============================================================
+data/cache/
+data/tmp/
+data/*.tmp
+*.cache
+.cache/
+logs/*.log
+logs/*.log.*
+!logs/.gitkeep
 
-.idea
-.vscode
-.ruff_cache
+# ============================================================
+#  Testing
+# ============================================================
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.hypothesis/
+coverage.xml
+*.cover
 
-data
+# ============================================================
+#  Jupyter
+# ============================================================
+.ipynb_checkpoints/
+*.ipynb
+
+# ============================================================
+#  Project-specific
+# ============================================================
+bot_buttons_backup.json
+backup_before_cleanup_*.json
+diagnostic_report.txt
+*_report.txt

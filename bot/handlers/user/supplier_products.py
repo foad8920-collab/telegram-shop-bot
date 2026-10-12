@@ -557,13 +557,7 @@ async def noop_handler(call: CallbackQuery) -> None:
     await _safe_answer(call)
 
 
-@router.callback_query(F.data.startswith("sv_buy:"))
-async def supplier_product_buy_handler(call: CallbackQuery, state: FSMContext) -> None:
-    await call.answer(" الشراء من الموردين قيد التطوير.", show_alert=True)
 
-# ============================================================
-#  Search in supplier products
-# ============================================================
 
 @router.callback_query(F.data.startswith("sv_search:"))
 async def supplier_search_start_handler(call: CallbackQuery, state: FSMContext) -> None:

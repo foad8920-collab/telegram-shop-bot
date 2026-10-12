@@ -1,0 +1,38 @@
+{
+  "uptime_seconds": 208.659318,
+  "events": {
+    "bot_command_start": 1,
+    "bot_profile": 1,
+    "bot_bought": 2,
+    "bot_my": 6
+  },
+  "timings": {
+    "handler_command_start": {
+      "avg": 3.0811705589294434,
+      "min": 3.0811705589294434,
+      "max": 3.0811705589294434,
+      "count": 1
+    },
+    "handler_profile": {
+      "avg": 4.791680574417114,
+      "min": 4.791680574417114,
+      "max": 4.791680574417114,
+      "count": 1
+    },
+    "handler_bought": {
+      "avg": 1.6118940114974976,
+      "min": 1.6080589294433594,
+      "max": 1.6157290935516357,
+      "count": 2
+    },
+    "handler_my": {
+      "avg": 2.2120994329452515,
+      "min": 1.811753273010254,
+      "max": 2.5779547691345215,
+      "count": 6
+    }
+  },
+  "errors": {},
+  "conversions": {},
+  "timestamp": "2026-10-12T17:56:45.074880"
+}

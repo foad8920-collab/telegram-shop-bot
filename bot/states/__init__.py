@@ -8,3 +8,4 @@ from .role_state import RoleMgmtFSM
 from .promo_state import PromoFSM
 from .review_state import ReviewFSM
 from .local_buy_state import LocalBuy, AdminOrder
+from .supplier_buy_state import SupplierBuy

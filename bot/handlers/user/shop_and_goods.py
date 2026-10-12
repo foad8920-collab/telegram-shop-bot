@@ -808,12 +808,6 @@ async def _show_search_page(target, state: FSMContext, query: str, page: int):
     await state.set_state(ShopStates.viewing_search_results)
 
 
-
-
-
-
-
-
 @router.callback_query(F.data.startswith('sp_'), ShopStates.viewing_search_results)
 async def navigate_search(call: CallbackQuery, state: FSMContext):
     """Pagination across search results. Format: sp_{page}"""
@@ -1141,82 +1135,6 @@ async def view_reviews_handler(call: CallbackQuery, state: FSMContext):
 
 
 # --- Bought items ---
-
-@router.callback_query(F.data == "bought_items")
-async def bought_items_callback_handler(call: CallbackQuery, state: FSMContext):
-    """
-    Show list of user's purchased items with lazy loading.
-    """
-    user_id = call.from_user.id
-    await call.answer()
-
-    # Create paginator for user's bought items
-    query_func = partial(query_user_bought_items, user_id)
-    paginator = LazyPaginator(query_func, per_page=10)
-
-    markup = await lazy_paginated_keyboard(
-        paginator=paginator,
-        item_text=lambda item: item.item_name,
-        item_callback=lambda item: f"bought-item:{item.id}:bought-goods-page_user_0",
-        page=0,
-        back_cb="profile",
-        nav_cb_prefix="bought-goods-page_user_"
-    )
-
-    await call.message.edit_text(localize("purchases.title"), reply_markup=markup)
-
-    # Save paginator state
-@router.callback_query(F.data.startswith('bought-goods-page_'))
-async def navigate_bought_items(call: CallbackQuery, state: FSMContext):
-    """
-    Pagination for user's purchased items with lazy loading.
-    Format: 'bought-goods-page_{data}_{page}', where data = 'user' or user_id.
-    """
-    parts = call.data.split('_')
-    if len(parts) < 3:
-        await call.answer(localize("purchases.pagination.invalid"))
-        return
-
-    data_type = parts[1]
-    try:
-        current_index = int(parts[2])
-    except ValueError:
-        current_index = 0
-
-    if data_type == 'user':
-        user_id = call.from_user.id
-        back_cb = 'profile'
-        pre_back = f'bought-goods-page_user_{current_index}'
-    else:
-        # Admin path: viewing another user's purchases. Gate on USERS_MANAGE — this callback prefix is not covered by the auth middleware.
-        from bot.database.methods import check_role_cached
-        caller_perms = await check_role_cached(call.from_user.id) or 0
-        if not Permission.granted(caller_perms, Permission.USERS_MANAGE):
-            await call.answer(localize("middleware.security.not_admin"), show_alert=True)
-            return
-        try:
-            user_id = int(data_type)
-        except ValueError:
-            await call.answer(localize("purchases.pagination.invalid"))
-            return
-        back_cb = f'check-user_{data_type}'
-        pre_back = f'bought-goods-page_{data_type}_{current_index}'
-
-    # Create paginator
-    await call.answer()
-    query_func = partial(query_user_bought_items, user_id)
-    paginator = LazyPaginator(query_func, per_page=10)
-
-    markup = await lazy_paginated_keyboard(
-        paginator=paginator,
-        item_text=lambda item: item.item_name,
-        item_callback=lambda item: f"bought-item:{item.id}:{pre_back}",
-        page=current_index,
-        back_cb=back_cb,
-        nav_cb_prefix=f"bought-goods-page_{data_type}_"
-    )
-
-    await call.message.edit_text(localize("purchases.title"), reply_markup=markup)
 
 
 @router.callback_query(F.data.startswith('bought-item:'))

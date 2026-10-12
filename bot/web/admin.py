@@ -1169,6 +1169,8 @@ class SupplierView(ModelView, model=Supplier):
         Supplier.name,
         Supplier.api_url,
         Supplier.profit_margin,
+        Supplier.auto_purchase_enabled,
+        Supplier.provider_balance,
         Supplier.sync_interval_minutes,
         Supplier.last_sync_at,
         Supplier.last_sync_status,
@@ -1208,6 +1210,11 @@ class SupplierView(ModelView, model=Supplier):
         "last_sync_error": "خطأ المزامنة",
         "last_sync_product_count": "عدد المنتجات",
         "sync_errors_count": "عدد الأخطاء",
+        "auto_purchase_enabled": "الشراء التلقائي",
+        "auto_purchase_threshold": "حد الشراء التلقائي",
+        "provider_balance": "رصيد المورد",
+        "last_balance_check": "آخر فحص للرصيد",
+        "auto_purchase_error": "خطأ الشراء التلقائي",
         "notes": "ملاحظات",
     }
     page_size = 25
@@ -1223,6 +1230,8 @@ class SupplierView(ModelView, model=Supplier):
         Supplier.sort_order,
         Supplier.sync_enabled,
         Supplier.sync_interval_minutes,
+        Supplier.auto_purchase_enabled,
+        Supplier.auto_purchase_threshold,
         Supplier.is_active,
         Supplier.notes,
     ]
@@ -1270,9 +1279,24 @@ class SupplierView(ModelView, model=Supplier):
         days = hours // 24
         return f"{days} يوم"
 
+    def auto_purchase_badge(model: Supplier, _attr) -> Markup:
+        if model.auto_purchase_enabled:
+            return Markup('<span style="background:#5cb85c;color:#fff;padding:2px 8px;border-radius:4px;font-size:12px;"> مفعل</span>')
+        return Markup('<span style="background:#999;color:#fff;padding:2px 8px;border-radius:4px;font-size:12px;"> معطّل</span>')
+
+    def balance_badge(model: Supplier, _attr) -> str:
+        if model.provider_balance is None:
+            return ""
+        try:
+            return f"{model.provider_balance:.2f}$"
+        except Exception:
+            return str(model.provider_balance)
+
     column_formatters = {
         "last_sync_status": lambda m, a: SupplierView.sync_status_badge(m, a),
         "sync_interval_minutes": lambda m, a: SupplierView.interval_label(m, a),
+        "auto_purchase_enabled": lambda m, a: SupplierView.auto_purchase_badge(m, a),
+        "provider_balance": lambda m, a: SupplierView.balance_badge(m, a),
     }
 
     @action(

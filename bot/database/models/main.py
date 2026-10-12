@@ -540,6 +540,19 @@ class Supplier(Database.BASE):
     last_sync_product_count: Mapped[Optional[int]] = mapped_column(Integer, default=0)
     sync_errors_count: Mapped[Optional[int]] = mapped_column(Integer, default=0)
 
+    # --- Auto purchase settings (future feature) ---
+    auto_purchase_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default='false',
+    )
+    auto_purchase_threshold: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2), nullable=False, default=0, server_default='0',
+    )
+    provider_balance: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2), nullable=True)
+    last_balance_check: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    auto_purchase_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     # --- Notes ---
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
