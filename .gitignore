@@ -158,3 +158,4 @@ bot_buttons_backup.json
 backup_before_cleanup_*.json
 diagnostic_report.txt
 *_report.txt
+*.bak
