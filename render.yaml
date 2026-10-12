@@ -1,0 +1,44 @@
+services:
+  - type: web
+    name: yemen-subscriptions-bot
+    env: python
+    region: frankfurt
+    plan: free
+    branch: main
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: python run.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.0
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: BOT_TOKEN
+        sync: false
+      - key: OWNER_ID
+        sync: false
+      - key: ADMINS
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: ADMIN_HOST
+        value: 0.0.0.0
+      - key: ADMIN_PORT
+        value: "9090"
+      - key: ADMIN_USERNAME
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_COOKIE_SECURE
+        value: "1"
+      - key: PAY_CURRENCY
+        value: "$"
+      - key: STACKVAULT_API_URL
+        sync: false
+      - key: STACKVAULT_API_KEY
+        sync: false
+      - key: PANDORA_API_KEY
+        sync: false
+      - key: REDIS_ENABLED
+        value: "0"
+      - key: REVIEWS_ENABLED
+        value: "0"
