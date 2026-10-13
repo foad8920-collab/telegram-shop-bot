@@ -191,7 +191,6 @@ async def sync_supplier(supplier_id: int, *, manual: bool = False) -> dict:
             return report
 
         api_url = (supplier.api_url or "").strip()
-        supplier_name = (supplier.name or "").lower()
 
         # Skip local suppliers
         if api_url.startswith("local://"):
@@ -201,7 +200,7 @@ async def sync_supplier(supplier_id: int, *, manual: bool = False) -> dict:
 
     # ---- Fetch products ----
     try:
-        products = await _fetch_products(supplier_name, api_url)
+        products = await _fetch_products(supplier)
     except Exception as e:
         logger.exception("Failed to fetch products for supplier %s: %s", supplier_id, e)
         report["status"] = "failed"
@@ -391,10 +390,17 @@ async def sync_supplier(supplier_id: int, *, manual: bool = False) -> dict:
 #  Fetch products (by supplier type)
 # ============================================================
 
-async def _fetch_products(supplier_name: str, api_url: str) -> list[dict]:
-    """Fetch products using the appropriate client."""
-    name_lower = supplier_name.lower()
+async def _fetch_products(supplier: Supplier) -> list[dict]:
+    """Fetch products using the appropriate client.
 
+    StackVault and Pandora keep their dedicated clients (env-based keys).
+    Any other supplier falls back to the generic client (DB-based key).
+    """
+    name_lower = (supplier.name or "").lower()
+    api_url = (supplier.api_url or "").strip()
+    api_key = (supplier.api_key or "").strip()
+
+    # --- Known suppliers ---
     if "stackvault" in name_lower:
         from bot.misc.services import StackVaultClient
         async with StackVaultClient() as client:
@@ -405,7 +411,16 @@ async def _fetch_products(supplier_name: str, api_url: str) -> list[dict]:
         async with PandoraClient() as client:
             return await client.get_products()
 
-    raise ValueError(f"Unknown supplier: {supplier_name}")
+    # --- Generic fallback ---
+    from bot.misc.services.generic_supplier import (
+        GenericSupplierClient,
+        GenericSupplierError,
+    )
+    try:
+        async with GenericSupplierClient(api_url, api_key) as client:
+            return await client.get_products()
+    except GenericSupplierError as e:
+        raise ValueError(f"Generic supplier failed: {e}") from e
 
 
 # ============================================================
