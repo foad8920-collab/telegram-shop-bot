@@ -46,9 +46,12 @@ class GenericSupplierClient:
     async def __aenter__(self) -> "GenericSupplierClient":
         headers = {"Accept": "application/json"}
         if self.api_key:
-            # Provide common auth header variants
+            # Provide common auth header variants for various APIs
             headers["Authorization"] = f"Bearer {self.api_key}"
             headers["X-API-Key"] = self.api_key
+            headers["X-Reseller-Key"] = self.api_key
+            headers["api-key"] = self.api_key
+            headers["apikey"] = self.api_key
         self._session = aiohttp.ClientSession(headers=headers, timeout=self._timeout)
         return self
 
