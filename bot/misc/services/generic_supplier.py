@@ -30,7 +30,7 @@ class GenericSupplierClient:
     # Possible field names for product attributes
     ID_KEYS = ("id", "product_id", "external_id", "sku", "code")
     NAME_KEYS = ("name", "title", "product_name", "label")
-    PRICE_KEYS = ("price", "cost", "cost_price", "unit_price", "base_price", "supplier_price")
+    PRICE_KEYS = ("price_usd", "price", "cost", "cost_price", "unit_price", "base_price", "supplier_price")
     STOCK_KEYS = ("stock", "quantity", "available_stock", "count", "remaining", "qty", "inventory")
     DESC_KEYS = ("description", "desc", "details", "info", "summary")
     IMAGE_KEYS = ("image", "image_url", "photo", "thumbnail", "picture", "img")
