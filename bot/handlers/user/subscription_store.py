@@ -39,7 +39,7 @@ def subscription_store_keyboard(products: list[dict], *, show_search: bool = Fal
         selling_price = product.get("selling_price")
         price = f"${selling_price}" if selling_price is not None else localize("subscription_store.price_unset")
         rows.append([InlineKeyboardButton(
-            text=f"{status} | {name[:40]} — {price}",
+            text=f"{status} | {name} — {price}",
             callback_data=f"sv_item:{index}",
             style="success" if is_available(product) else "danger",
         )])

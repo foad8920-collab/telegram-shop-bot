@@ -84,7 +84,7 @@ def subscription_store_keyboard(products: list[dict], page: int, total_pages: in
         selling_price = product.get("selling_price")
         price = f"${selling_price}" if selling_price is not None else localize("subscription_store.price_unset")
         status = localize("subscription_store.available" if is_available(product) else "subscription_store.out_of_stock")
-        label = f"{status} | {name[:40]} — {price}"
+        label = f"{status} | {name} — {price}"
         kb.row(InlineKeyboardButton(text=label, callback_data=f"sv_item:{index}"))
 
     if total_pages > 1:

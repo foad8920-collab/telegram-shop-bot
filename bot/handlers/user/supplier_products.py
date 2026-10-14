@@ -233,7 +233,7 @@ async def _build_categories_kb(
             style = "danger"
             suffix = " (نفدت)"
 
-        name = (prod.name or "")[:30]
+        name = (prod.name or "")
         price = _fmt(prod.selling_price) if prod.selling_price else "?"
 
         rows.append([InlineKeyboardButton(
