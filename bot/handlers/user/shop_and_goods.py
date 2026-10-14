@@ -426,7 +426,7 @@ async def _show_stackvault_page(call: CallbackQuery, state: FSMContext, page: in
 
             f"{_extract_emoji(product)}"
 
-            f"{_shorten(product.get('name') or 'StackVault', 50)}"
+            f"{product.get('name') or 'StackVault'}"
 
             f"  ${product.get('selling_price') or '?'} ({product.get('stock', 0)})"
 
@@ -749,7 +749,7 @@ async def _show_goods_page(call: CallbackQuery, state: FSMContext,
 
             f"{_extract_emoji(item)}"
 
-            f"{_shorten(item.get('name') or 'StackVault', 50)}"
+            f"{item.get('name') or 'StackVault'}"
 
             f"  ${item.get('selling_price') or '?'} ({item.get('stock', 0)})"
 

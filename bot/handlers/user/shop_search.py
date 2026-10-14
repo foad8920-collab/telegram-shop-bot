@@ -70,7 +70,7 @@ def _supplier_kb(items: list, supplier_id: int) -> list[list[InlineKeyboardButto
             icon = ""
             suffix = " (نفدت)"
             style = "danger"
-        name = _shorten(prod.name or "", 45)
+        name = prod.name or ""
         price = _fmt(prod.selling_price) if prod.selling_price else "?"
         rows.append([InlineKeyboardButton(
             text=f"{icon} {name}  {price}{suffix}"[:64],

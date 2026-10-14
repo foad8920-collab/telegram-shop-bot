@@ -234,7 +234,7 @@ async def _build_categories_kb(
             style = "danger"
             suffix = " (نفدت)"
 
-        name = _shorten(prod.name or "", 45)
+        name = prod.name or ""
         price = _fmt(prod.selling_price) if prod.selling_price else "?"
 
         rows.append([InlineKeyboardButton(
@@ -407,7 +407,7 @@ async def _build_products_kb(supplier_id: int, category: str, page: int) -> tupl
             style = "danger"
             suffix = " (نفدت)"
 
-        name = _shorten(prod.name or "", 45)[:35]
+        name = prod.name or ""[:35]
         price = _fmt(prod.selling_price) if prod.selling_price else "?"
         text = f"{icon} {name}  {price}{suffix}"
 
@@ -681,7 +681,7 @@ async def supplier_search_message_handler(message: Message, state: FSMContext) -
             style = "danger"
             suffix = " (نفدت)"
 
-        name = _shorten(prod.name or "", 45)[:35]
+        name = prod.name or ""[:35]
         price = _fmt(prod.selling_price) if prod.selling_price else "?"
 
         rows.append([InlineKeyboardButton(
