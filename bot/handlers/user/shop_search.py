@@ -11,6 +11,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.exceptions import TelegramBadRequest
 from sqlalchemy import select, func as sa_func, or_ as sa_or
 
+from bot.handlers.user.shop_and_goods import _shorten
 from bot.database.main import Database
 from bot.database.models.main import (
     LocalSubscription, SupplierProduct, Supplier,
@@ -69,7 +70,7 @@ def _supplier_kb(items: list, supplier_id: int) -> list[list[InlineKeyboardButto
             icon = ""
             suffix = " (نفدت)"
             style = "danger"
-        name = (prod.name or "")
+        name = _shorten(prod.name or "", 45)
         price = _fmt(prod.selling_price) if prod.selling_price else "?"
         rows.append([InlineKeyboardButton(
             text=f"{icon} {name}  {price}{suffix}"[:64],

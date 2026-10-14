@@ -12,6 +12,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.exceptions import TelegramBadRequest
 from sqlalchemy import select, distinct
 
+from bot.handlers.user.shop_and_goods import _shorten
 from bot.database.main import Database
 from bot.database.models.main import Supplier, SupplierProduct
 
@@ -233,7 +234,7 @@ async def _build_categories_kb(
             style = "danger"
             suffix = " (نفدت)"
 
-        name = (prod.name or "")
+        name = _shorten(prod.name or "", 45)
         price = _fmt(prod.selling_price) if prod.selling_price else "?"
 
         rows.append([InlineKeyboardButton(
@@ -406,7 +407,7 @@ async def _build_products_kb(supplier_id: int, category: str, page: int) -> tupl
             style = "danger"
             suffix = " (نفدت)"
 
-        name = (prod.name or "")[:35]
+        name = _shorten(prod.name or "", 45)[:35]
         price = _fmt(prod.selling_price) if prod.selling_price else "?"
         text = f"{icon} {name}  {price}{suffix}"
 
@@ -680,7 +681,7 @@ async def supplier_search_message_handler(message: Message, state: FSMContext) -
             style = "danger"
             suffix = " (نفدت)"
 
-        name = (prod.name or "")[:35]
+        name = _shorten(prod.name or "", 45)[:35]
         price = _fmt(prod.selling_price) if prod.selling_price else "?"
 
         rows.append([InlineKeyboardButton(

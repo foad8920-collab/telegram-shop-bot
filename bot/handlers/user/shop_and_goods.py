@@ -126,66 +126,77 @@ def _pretty_category(name: str, count: int) -> str:
 # ============================================================
 EMOJI_MAP: dict[str, str] = {
     # الأيقونات الشائعة من VenteBot/Mوردين
-    "bolt": "",
-    "fire": "",
-    "star": "",
-    "robot": "",
-    "gem": "",
-    "diamond": "",
-    "rocket": "",
-    "crown": "",
-    "shield": "",
-    "heart": "",
-    "check": "",
-    "gift": "",
-    "lock": "",
-    "key": "",
-    "globe": "",
-    "phone": "",
-    "computer": "",
-    "laptop": "",
-    "gamepad": "",
-    "game": "",
-    "music": "",
-    "video": "",
-    "movie": "",
-    "camera": "",
-    "book": "",
-    "email": "",
-    "mail": "",
-    "cloud": "",
-    "sun": "",
-    "moon": "",
-    "sparkles": "",
-    "zap": "",
-    "flash": "",
-    "warning": "",
+    "bolt": "⚡",
+    "fire": "🔥",
+    "star": "⭐",
+    "robot": "🤖",
+    "gem": "💎",
+    "diamond": "💎",
+    "rocket": "🚀",
+    "crown": "👑",
+    "shield": "🛡️",
+    "heart": "❤️",
+    "check": "✅",
+    "gift": "🎁",
+    "lock": "🔒",
+    "key": "🔑",
+    "globe": "🌍",
+    "phone": "📱",
+    "computer": "💻",
+    "laptop": "💻",
+    "gamepad": "🎮",
+    "game": "🎮",
+    "music": "🎵",
+    "video": "🎬",
+    "movie": "🎬",
+    "camera": "📷",
+    "book": "📚",
+    "email": "📧",
+    "mail": "📧",
+    "cloud": "☁️",
+    "sun": "☀️",
+    "moon": "🌙",
+    "sparkles": "✨",
+    "zap": "⚡",
+    "flash": "⚡",
+    "warning": "⚠️",
     "info": "ℹ",
-    "question": "",
-    "exclamation": "",
-    "cart": "",
-    "shopping": "",
-    "money": "",
-    "dollar": "",
-    "credit": "",
-    "card": "",
-    "trophy": "",
-    "medal": "",
-    "target": "",
-    "package": "",
-    "box": "",
-    "thumbsup": "",
-    "like": "",
-    "handshake": "",
-    "link": "",
-    "chart": "",
-    "graph": "",
-    "clock": "",
-    "time": "",
-    "calendar": "",
-    "flag": "",
-    "pin": "",
+    "question": "❓",
+    "exclamation": "❗",
+    "cart": "🛒",
+    "shopping": "🛒",
+    "money": "💰",
+    "dollar": "💵",
+    "credit": "💳",
+    "card": "💳",
+    "trophy": "🏆",
+    "medal": "🏅",
+    "target": "🎯",
+    "package": "📦",
+    "box": "📦",
+    "thumbsup": "👍",
+    "like": "👍",
+    "handshake": "🤝",
+    "link": "🔗",
+    "chart": "📊",
+    "graph": "📊",
+    "clock": "🕐",
+    "time": "⏰",
+    "calendar": "📅",
+    "flag": "🚩",
+    "pin": "📌",
 }
+
+
+
+
+def _shorten(text: str, max_len: int = 45) -> str:
+    """اختصار ذكي للنص مع إضافة ... في النهاية."""
+    text = str(text or "").strip()
+    if len(text) <= max_len:
+        return text
+    return text[:max_len - 3].rstrip() + "..."
+
 
 
 def _extract_emoji(product: dict) -> str:
@@ -415,9 +426,9 @@ async def _show_stackvault_page(call: CallbackQuery, state: FSMContext, page: in
 
             f"{_extract_emoji(product)}"
 
-            f"{str(product.get('name') or 'StackVault')}"
+            f"{_shorten(product.get('name') or 'StackVault', 45)}"
 
-            f" | ${product.get('selling_price') or '?'} | {product.get('stock', 0)} "
+            f" | ${product.get('selling_price') or '?'} | {product.get('stock', 0)}"
 
         ),
         item_callback=lambda product: f"svitm:{page_products.index(product)}:{page}",
@@ -738,9 +749,9 @@ async def _show_goods_page(call: CallbackQuery, state: FSMContext,
 
             f"{_extract_emoji(item)}"
 
-            f"{str(item.get('name') or 'StackVault')}"
+            f"{_shorten(item.get('name') or 'StackVault', 45)}"
 
-            f" | ${item.get('selling_price') or '?'} | {item.get('stock', 0)} "
+            f" | ${item.get('selling_price') or '?'} | {item.get('stock', 0)}"
 
         ),
         item_callback=lambda item: f"itm:{item['id']}:{page}",
