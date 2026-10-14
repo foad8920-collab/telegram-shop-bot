@@ -426,9 +426,9 @@ async def _show_stackvault_page(call: CallbackQuery, state: FSMContext, page: in
 
             f"{_extract_emoji(product)}"
 
-            f"{_shorten(product.get('name') or 'StackVault', 45)}"
+            f"{_shorten(product.get('name') or 'StackVault', 50)}"
 
-            f" | ${product.get('selling_price') or '?'} | {product.get('stock', 0)}"
+            f"  ${product.get('selling_price') or '?'} ({product.get('stock', 0)})"
 
         ),
         item_callback=lambda product: f"svitm:{page_products.index(product)}:{page}",
@@ -749,9 +749,9 @@ async def _show_goods_page(call: CallbackQuery, state: FSMContext,
 
             f"{_extract_emoji(item)}"
 
-            f"{_shorten(item.get('name') or 'StackVault', 45)}"
+            f"{_shorten(item.get('name') or 'StackVault', 50)}"
 
-            f" | ${item.get('selling_price') or '?'} | {item.get('stock', 0)}"
+            f"  ${item.get('selling_price') or '?'} ({item.get('stock', 0)})"
 
         ),
         item_callback=lambda item: f"itm:{item['id']}:{page}",
