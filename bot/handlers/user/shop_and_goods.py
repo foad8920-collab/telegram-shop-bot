@@ -409,7 +409,17 @@ async def _show_stackvault_page(call: CallbackQuery, state: FSMContext, page: in
         return products[offset:offset + limit]
     markup = await lazy_paginated_keyboard(
         paginator=LazyPaginator(_query, per_page=10),
-        item_text=lambda product: f"{'متاح' if _stackvault_available(product) else 'غير متاح'} | {str(product.get('name') or 'StackVault')[:40]} | ${product.get('selling_price') or '?'} | {product.get('stock', 0)} 📦",
+        item_text=lambda product: (
+
+            f"{'' if _stackvault_available(product) else ''} "
+
+            f"{_extract_emoji(product)}"
+
+            f"{str(product.get('name') or 'StackVault')}"
+
+            f" | ${product.get('selling_price') or '?'} | {product.get('stock', 0)} "
+
+        ),
         item_callback=lambda product: f"svitm:{page_products.index(product)}:{page}",
         item_style=lambda product: "success" if int(product.get("stock", 0) or 0) > 0 else "danger",
         page=page, back_cb="shop", nav_cb_prefix="svpg_",
@@ -722,7 +732,17 @@ async def _show_goods_page(call: CallbackQuery, state: FSMContext,
     page_items = await paginator.get_page(page)
     markup = await lazy_paginated_keyboard(
         paginator=paginator,
-        item_text=lambda item: f"{'متاح' if _stackvault_available(item) else 'غير متاح'} | {str(item.get('name') or 'StackVault')[:40]} | ${item.get('selling_price') or '?'} | {item.get('stock', 0)} 📦",
+        item_text=lambda item: (
+
+            f"{'' if _stackvault_available(item) else ''} "
+
+            f"{_extract_emoji(item)}"
+
+            f"{str(item.get('name') or 'StackVault')}"
+
+            f" | ${item.get('selling_price') or '?'} | {item.get('stock', 0)} "
+
+        ),
         item_callback=lambda item: f"itm:{item['id']}:{page}",
         item_style=lambda item: "success" if int(item.get("stock", 0) or 0) > 0 else "danger",
         page=page,
