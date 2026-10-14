@@ -7,6 +7,11 @@ Support Bot for Yemen E-Platform
 3. رسائل العميل تُنقل إلى Topic الخاص به
 4. ردود فريق الدعم من Topic تُنقل إلى العميل في الخاص
 
+التحسينات:
+- Topic محفوظ في قاعدة البيانات (support_topics)
+- استمرارية المحادثات عبر إعادة التشغيل
+- تخزين اسم العميل و username
+
 المتغيرات المطلوبة (Environment):
 - SUPPORT_BOT_TOKEN
 - SUPPORT_GROUP_ID
@@ -28,6 +33,10 @@ from aiogram.types import (
     Message,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from sqlalchemy import select
+
+from bot.database.main import Database
+from bot.database.models.main import SupportTopic
 
 # ===== التسجيل =====
 logging.basicConfig(
@@ -42,11 +51,96 @@ dp: Optional[Dispatcher] = None
 router: Optional[Router] = None
 SUPPORT_GROUP_ID: int = 0
 
-# ===== تخزين مؤقت: user_id  topic_id =====
-_user_topics: dict[int, int] = {}
+
+# ============================================================
+#  دوال قاعدة البيانات
+# ============================================================
+async def get_user_topic(user_id: int) -> Optional[int]:
+    """جلب topic_id من قاعدة البيانات."""
+    try:
+        async with Database().session() as session:
+            result = await session.execute(
+                select(SupportTopic).where(
+                    SupportTopic.user_id == user_id,
+                    SupportTopic.is_active == True  # noqa: E712
+                )
+            )
+            topic = result.scalar_one_or_none()
+            return topic.topic_id if topic else None
+    except Exception as e:
+        logger.exception("get_user_topic failed: %s", e)
+        return None
 
 
-# ===== بناء المعالجات =====
+async def save_user_topic(
+    user_id: int,
+    topic_id: int,
+    full_name: str = "",
+    username: str = "",
+) -> bool:
+    """حفظ topic_id في قاعدة البيانات."""
+    try:
+        async with Database().session() as session:
+            existing = await session.get(SupportTopic, user_id)
+            if existing:
+                existing.topic_id = topic_id
+                existing.is_active = True
+                existing.user_full_name = full_name
+                existing.user_username = username
+                existing.closed_at = None
+            else:
+                topic = SupportTopic(
+                    user_id=user_id,
+                    topic_id=topic_id,
+                    user_full_name=full_name,
+                    user_username=username,
+                    is_active=True,
+                )
+                session.add(topic)
+            await session.commit()
+            return True
+    except Exception as e:
+        logger.exception("save_user_topic failed: %s", e)
+        return False
+
+
+async def close_user_topic(user_id: int) -> bool:
+    """إنهاء المحادثة (إخفاء من القائمة النشطة)."""
+    try:
+        async with Database().session() as session:
+            topic = await session.get(SupportTopic, user_id)
+            if topic:
+                topic.is_active = False
+                from datetime import datetime, timezone
+                topic.closed_at = datetime.now(timezone.utc)
+                await session.commit()
+                return True
+            return False
+    except Exception as e:
+        logger.exception("close_user_topic failed: %s", e)
+        return False
+
+
+async def find_user_by_topic(topic_id: int) -> Optional[int]:
+    """البحث عن user_id من topic_id."""
+    try:
+        async with Database().session() as session:
+            result = await session.execute(
+                select(SupportTopic).where(
+                    SupportTopic.topic_id == topic_id,
+                    SupportTopic.is_active == True  # noqa: E712
+                )
+            )
+            topic = result.scalar_one_or_none()
+            return topic.user_id if topic else None
+    except Exception as e:
+        logger.exception("find_user_by_topic failed: %s", e)
+        return None
+
+
+# ============================================================
+#  بناء المعالجات
+# ============================================================
 def _setup_handlers(r: Router) -> None:
     """تسجيل كل المعالجات في الـ Router."""
 
@@ -79,20 +173,34 @@ def _setup_handlers(r: Router) -> None:
         user = call.from_user
         user_id = user.id
 
-        if user_id in _user_topics:
+        # فحص إذا كان للعميل topic نشط
+        existing_topic = await get_user_topic(user_id)
+
+        if existing_topic:
             await call.answer("المحادثة مفتوحة بالفعل ", show_alert=False)
             await call.message.answer(
                 " محادثتك مفتوحة. اكتب رسالتك وسيتم توصيلها للدعم."
             )
             return
 
+        # أنشئ Topic جديد
         try:
             topic = await bot.create_forum_topic(
                 chat_id=SUPPORT_GROUP_ID,
                 name=f" {user.full_name} | {user_id}",
             )
             topic_id = topic.message_thread_id
-            _user_topics[user_id] = topic_id
+
+            # احفظ في قاعدة البيانات
+            saved = await save_user_topic(
+                user_id=user_id,
+                topic_id=topic_id,
+                full_name=user.full_name or "",
+                username=user.username or "",
+            )
+
+            if not saved:
+                logger.error("Failed to save topic in DB for user %s", user_id)
 
             logger.info("Created topic %s for user %s", topic_id, user_id)
 
@@ -103,6 +211,7 @@ def _setup_handlers(r: Router) -> None:
                 " سيصلك الرد في أقرب وقت."
             )
 
+            # رسالة ترحيبية في الـ Topic
             await bot.send_message(
                 chat_id=SUPPORT_GROUP_ID,
                 message_thread_id=topic_id,
@@ -127,10 +236,15 @@ def _setup_handlers(r: Router) -> None:
         if not message.from_user or bot is None:
             return
 
+        # تجاهل /start (معالجته خاصة)
+        if message.text and message.text.startswith("/start"):
+            return
+
         user_id = message.from_user.id
-        topic_id = _user_topics.get(user_id)
+        topic_id = await get_user_topic(user_id)
 
         if not topic_id:
+            # لم يبدأ محادثة
             kb = InlineKeyboardBuilder()
             kb.row(InlineKeyboardButton(
                 text=" بدء محادثة مع الدعم",
@@ -167,11 +281,7 @@ def _setup_handlers(r: Router) -> None:
         if message.text and message.text.startswith("/"):
             return
 
-        customer_id: Optional[int] = None
-        for uid, tid in _user_topics.items():
-            if tid == message.message_thread_id:
-                customer_id = uid
-                break
+        customer_id = await find_user_by_topic(message.message_thread_id)
 
         if not customer_id:
             return
@@ -188,7 +298,9 @@ def _setup_handlers(r: Router) -> None:
             await message.reply(f" فشل إرسال الرد للعميل: {e}")
 
 
-# ===== التشغيل =====
+# ============================================================
+#  التشغيل
+# ============================================================
 async def main():
     """تشغيل بوت الدعم الفني."""
     global bot, dp, router, SUPPORT_GROUP_ID

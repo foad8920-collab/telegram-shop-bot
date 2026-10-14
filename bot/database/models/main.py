@@ -941,3 +941,36 @@ class SupplierSyncLog(Database.BASE):
 #  END Supplier Models
 # ============================================================
 
+# ============================================================
+#  Support Bot Models (Topics)
+# ============================================================
+class SupportTopic(Database.BASE):
+    """ربط بين user_id و topic_id في مجموعة الدعم."""
+    __tablename__ = 'support_topics'
+    __table_args__ = (
+        Index('idx_support_topic_id', 'topic_id'),
+        Index('idx_support_updated_at', 'updated_at'),
+    )
+
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    topic_id: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
+    
+    user_full_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    user_username: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default='true')
+    
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, 
+        server_default=func.now(), onupdate=func.now()
+    )
+    closed_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    def __str__(self):
+        return f"SupportTopic(user={self.user_id}, topic={self.topic_id})"
+
