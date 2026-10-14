@@ -119,6 +119,111 @@ def _pretty_category(name: str, count: int) -> str:
     return f"« {clean.capitalize()} - {count} Plans ({count}) {emoji}".strip()
 
 
+
+
+# ============================================================
+#  Emoji Mapping (لتحويل أسماء الأيقونات إلى رموز)
+# ============================================================
+EMOJI_MAP: dict[str, str] = {
+    # الأيقونات الشائعة من VenteBot/Mوردين
+    "bolt": "",
+    "fire": "",
+    "star": "",
+    "robot": "",
+    "gem": "",
+    "diamond": "",
+    "rocket": "",
+    "crown": "",
+    "shield": "",
+    "heart": "",
+    "check": "",
+    "gift": "",
+    "lock": "",
+    "key": "",
+    "globe": "",
+    "phone": "",
+    "computer": "",
+    "laptop": "",
+    "gamepad": "",
+    "game": "",
+    "music": "",
+    "video": "",
+    "movie": "",
+    "camera": "",
+    "book": "",
+    "email": "",
+    "mail": "",
+    "cloud": "",
+    "sun": "",
+    "moon": "",
+    "sparkles": "",
+    "zap": "",
+    "flash": "",
+    "warning": "",
+    "info": "ℹ",
+    "question": "",
+    "exclamation": "",
+    "cart": "",
+    "shopping": "",
+    "money": "",
+    "dollar": "",
+    "credit": "",
+    "card": "",
+    "trophy": "",
+    "medal": "",
+    "target": "",
+    "package": "",
+    "box": "",
+    "thumbsup": "",
+    "like": "",
+    "handshake": "",
+    "link": "",
+    "chart": "",
+    "graph": "",
+    "clock": "",
+    "time": "",
+    "calendar": "",
+    "flag": "",
+    "pin": "",
+}
+
+
+def _extract_emoji(product: dict) -> str:
+    """استخراج الأيقونة (emoji) من بيانات المنتج.
+
+    الأولويات:
+    1. الحقل المباشر emoji (إذا كان رمزًا)
+    2. من raw_data (JSONB من المورد)
+    3. من raw (dict من GenericSupplierClient)
+    4. الترجمة من EMOJI_MAP
+    """
+    # قائمة المصادر المحتملة
+    sources = [
+        product.get("emoji"),
+        (product.get("raw") or {}).get("_bot_emoji") if isinstance(product.get("raw"), dict) else None,
+        (product.get("raw") or {}).get("emoji") if isinstance(product.get("raw"), dict) else None,
+        (product.get("raw_data") or {}).get("emoji") if isinstance(product.get("raw_data"), dict) else None,
+    ]
+
+    for emoji in sources:
+        if not emoji:
+            continue
+        emoji_str = str(emoji).strip()
+        if not emoji_str:
+            continue
+
+        # إذا كان رمزًا فعليًا (1-2 حرف), أعده كما هو
+        if len(emoji_str) <= 2:
+            return emoji_str + " "
+
+        # إذا كان اسمًا (مثل "bolt"), ابحث في القاموس
+        mapped = EMOJI_MAP.get(emoji_str.lower())
+        if mapped:
+            return mapped + " "
+
+    return ""
+
+
 async def _pretty_product(name: str) -> str:
     return f"{name.get('name') or 'StackVault'} | ${name.get('selling_price') or '?'} | {name.get('stock', 0)} 📦"
 

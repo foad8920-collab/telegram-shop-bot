@@ -35,6 +35,7 @@ class GenericSupplierClient:
     DESC_KEYS = ("description", "desc", "details", "info", "summary")
     IMAGE_KEYS = ("image", "image_url", "photo", "thumbnail", "picture", "img")
     CATEGORY_KEYS = ("category", "category_name", "group", "type", "section")
+    EMOJI_KEYS = ("emoji", "icon", "symbol", "badge")
 
     _timeout = aiohttp.ClientTimeout(total=30)
 
@@ -120,6 +121,13 @@ class GenericSupplierClient:
         """Normalize field names to match the bot's expected schema."""
         price = self._first(product, self.PRICE_KEYS) or 0
         stock = self._first(product, self.STOCK_KEYS) or 0
+        # نسخة من البيانات الخام لإضافة معلومات إضافية
+        raw_copy = dict(product)
+
+        emoji = self._first(product, self.EMOJI_KEYS)
+        if emoji:
+            raw_copy["_bot_emoji"] = str(emoji)
+
         return {
             "id": str(self._first(product, self.ID_KEYS) or ""),
             "name": str(self._first(product, self.NAME_KEYS) or "Unknown"),
@@ -128,5 +136,6 @@ class GenericSupplierClient:
             "description": str(self._first(product, self.DESC_KEYS) or ""),
             "image_url": str(self._first(product, self.IMAGE_KEYS) or ""),
             "category": str(self._first(product, self.CATEGORY_KEYS) or ""),
-            "raw": product,
+            "emoji": str(emoji or ""),
+            "raw": raw_copy,
         }
