@@ -89,6 +89,7 @@ from bot.database.models.main import (
     
     User, Role, Categories, Goods, ItemValues,
     BoughtGoods, Operations, Payments, ReferralEarnings,
+    ReferralSettings, ReferralProductReward, ReferralReward,
     AuditLog, PromoCodes, CartItems, Reviews, promo_scope_for,
 )
 from bot.misc.metrics import get_metrics
@@ -490,6 +491,125 @@ class ReferralEarningsAdmin(ModelView, model=ReferralEarnings):
     name_plural = "أرباح الإحالات"
     column_labels = {"id": "الرقم", "referrer_id": "المُحيل", "referral_id": "المُحال", "amount": "المبلغ", "original_amount": "المبلغ الأصلي", "created_at": "تاريخ الإنشاء"}
     icon = "fa-solid fa-handshake"
+
+
+# ============================================================
+#  Referral Settings & Rewards (الإعدادات والمكافآت)
+# ============================================================
+class ReferralSettingsAdmin(AuditModelView, model=ReferralSettings):
+    """إعدادات نظام الإحالة - قابلة للتعديل."""
+    name = "إعدادات الإحالة"
+    name_plural = "إعدادات الإحالة"
+    icon = "fa-solid fa-gift"
+    
+    column_list = [
+        ReferralSettings.id,
+        ReferralSettings.required_count,
+        ReferralSettings.is_active,
+        ReferralSettings.updated_at,
+        ReferralSettings.updated_by,
+        ReferralSettings.notes,
+    ]
+    column_labels = {
+        "id": "الرقم",
+        "required_count": "عدد المشترين المطلوب",
+        "is_active": "مفعّل",
+        "updated_at": "آخر تحديث",
+        "updated_by": "آخر من عدّل",
+        "notes": "ملاحظات",
+    }
+    column_sortable_list = [ReferralSettings.id, ReferralSettings.required_count]
+    column_default_sort = (ReferralSettings.id, False)
+    
+    # السماح بالتعديل فقط (لا إنشاء/حذف)
+    can_create = False
+    can_delete = False
+    can_edit = True
+
+
+class ReferralProductRewardAdmin(ModelView, model=ReferralProductReward):
+    """عدادات الإحالات لكل منتج."""
+    name = "عدادات الإحالات"
+    name_plural = "عدادات الإحالات"
+    icon = "fa-solid fa-list-ol"
+    
+    column_list = [
+        ReferralProductReward.id,
+        ReferralProductReward.referrer_id,
+        ReferralProductReward.referred_user_id,
+        ReferralProductReward.product_name,
+        ReferralProductReward.order_id,
+        ReferralProductReward.is_counted,
+        ReferralProductReward.created_at,
+    ]
+    column_labels = {
+        "id": "الرقم",
+        "referrer_id": "صاحب الإحالة",
+        "referred_user_id": "العميل",
+        "product_name": "المنتج",
+        "order_id": "رقم الطلب",
+        "is_counted": "محتسب",
+        "created_at": "تاريخ الإنشاء",
+    }
+    column_searchable_list = [
+        ReferralProductReward.referrer_id,
+        ReferralProductReward.referred_user_id,
+        ReferralProductReward.product_name,
+    ]
+    column_sortable_list = [
+        ReferralProductReward.id,
+        ReferralProductReward.created_at,
+    ]
+    column_default_sort = (ReferralProductReward.id, True)
+    
+    # للقراءة فقط (لا تعديل يدوي)
+    can_create = False
+    can_edit = False
+    can_delete = True  # للسماح بحذف سجلات خاطئة
+
+
+class ReferralRewardAdmin(ModelView, model=ReferralReward):
+    """المكافآت المكتسبة."""
+    name = "المكافآت"
+    name_plural = "المكافآت"
+    icon = "fa-solid fa-trophy"
+    
+    column_list = [
+        ReferralReward.id,
+        ReferralReward.user_id,
+        ReferralReward.product_name,
+        ReferralReward.reward_type,
+        ReferralReward.status,
+        ReferralReward.order_id,
+        ReferralReward.delivered_at,
+        ReferralReward.created_at,
+    ]
+    column_labels = {
+        "id": "الرقم",
+        "user_id": "المستخدم",
+        "product_name": "المنتج",
+        "reward_type": "نوع المكافأة",
+        "status": "الحالة",
+        "order_id": "رقم الطلب",
+        "delivered_at": "تاريخ التسليم",
+        "created_at": "تاريخ الإنشاء",
+    }
+    column_searchable_list = [
+        ReferralReward.user_id,
+        ReferralReward.product_name,
+        ReferralReward.status,
+    ]
+    column_sortable_list = [
+        ReferralReward.id,
+        ReferralReward.status,
+        ReferralReward.created_at,
+    ]
+    column_default_sort = (ReferralReward.id, True)
+    
+    # للقراءة فقط
+    can_create = False
+    can_edit = True  # للسماح بتغيير الحالة يدويًا
+    can_delete = True
 
 
 class AuditLogAdmin(ModelView, model=AuditLog):
