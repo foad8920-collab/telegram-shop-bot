@@ -1026,3 +1026,27 @@ class ReferralReward(Database.BASE):
     def __str__(self):
         return f"Reward({self.user_id}:{self.product_name}:{self.status})"
 
+# ============================================================
+#  Referral Settings (إعدادات نظام الإحالة)
+# ============================================================
+class ReferralSettings(Database.BASE):
+    """إعدادات نظام المكافآت - قابلة للتعديل من SQLAdmin."""
+    __tablename__ = 'referral_settings'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    required_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=3, server_default='3'
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default='true'
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        server_default=func.now(), onupdate=func.now()
+    )
+    updated_by: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    def __str__(self):
+        return f"ReferralSettings(count={self.required_count}, active={self.is_active})"
+
