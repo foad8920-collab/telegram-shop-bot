@@ -1050,3 +1050,33 @@ class ReferralSettings(Database.BASE):
     def __str__(self):
         return f"ReferralSettings(count={self.required_count}, active={self.is_active})"
 
+# ============================================================
+#  Currency Rates (أسعار الصرف)
+# ============================================================
+class CurrencyRates(Database.BASE):
+    """أسعار الصرف - قابلة للتعديل من SQLAdmin."""
+    __tablename__ = 'currency_rates'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    usd_to_yer: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2), nullable=False, default=Decimal("533.00"), server_default='533.00'
+    )
+    usd_to_sar: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2), nullable=False, default=Decimal("3.70"), server_default='3.70'
+    )
+    sar_to_yer: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2), nullable=False, default=Decimal("140.00"), server_default='140.00'
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default='true'
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        server_default=func.now(), onupdate=func.now()
+    )
+    updated_by: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    def __str__(self):
+        return f"CurrencyRates(USD-YER={self.usd_to_yer}, USD-SAR={self.usd_to_sar}, SAR-YER={self.sar_to_yer})"
+

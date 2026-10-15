@@ -90,6 +90,7 @@ from bot.database.models.main import (
     User, Role, Categories, Goods, ItemValues,
     BoughtGoods, Operations, Payments, ReferralEarnings,
     ReferralSettings, ReferralProductReward, ReferralReward,
+    CurrencyRates,
     AuditLog, PromoCodes, CartItems, Reviews, promo_scope_for,
 )
 from bot.misc.metrics import get_metrics
@@ -630,6 +631,57 @@ class ReferralRewardAdmin(ModelView, model=ReferralReward):
     can_create = False
     can_edit = True  # للسماح بتغيير الحالة يدويًا
     can_delete = True
+
+
+# ============================================================
+#  Currency Settings (إعدادات أسعار الصرف)
+# ============================================================
+class CurrencySettingsAdmin(AuditModelView, model=CurrencyRates):
+    """إعدادات أسعار الصرف - قابلة للتعديل."""
+    name = "إعدادات أسعار الصرف"
+    name_plural = "إعدادات أسعار الصرف"
+    icon = "fa-solid fa-coins"
+
+    column_list = [
+        CurrencyRates.id,
+        CurrencyRates.usd_to_yer,
+        CurrencyRates.usd_to_sar,
+        CurrencyRates.sar_to_yer,
+        CurrencyRates.is_active,
+        CurrencyRates.updated_at,
+        CurrencyRates.updated_by,
+        CurrencyRates.notes,
+    ]
+    column_labels = {
+        "id": "الرقم",
+        "usd_to_yer": "1 دولار = ؟ ريال يمني",
+        "usd_to_sar": "1 دولار = ؟ ريال سعودي",
+        "sar_to_yer": "1 سعودي = ؟ ريال يمني",
+        "is_active": "مفعّل",
+        "updated_at": "آخر تحديث",
+        "updated_by": "آخر من عدّل",
+        "notes": "ملاحظات",
+    }
+    column_sortable_list = [CurrencyRates.id]
+    column_default_sort = (CurrencyRates.id, False)
+
+    can_create = True
+    can_delete = False
+    can_edit = True
+
+    async def after_model_change(self, data, model, is_created, request):
+        await super().after_model_change(data, model, is_created, request)
+        # مسح كاش أسعار الصرف
+        try:
+            from bot.database.methods.cache_utils import safe_create_task
+            # لا نحتاج cache محدد حاليًا  نقرأ مباشرة من DB
+            # لكن نضيف هذا السطر للتوافق المستقبلي
+            _ = safe_create_task
+        except Exception:
+            pass
+
+    def __str__(self):
+        return f"CurrencyRates(USD-YER={self.usd_to_yer})"
 
 
 class AuditLogAdmin(ModelView, model=AuditLog):
@@ -1831,6 +1883,7 @@ def create_admin_app(bot: Any = None) -> Starlette:
     admin.add_view(ReferralSettingsAdmin)
     admin.add_view(ReferralProductRewardAdmin)
     admin.add_view(ReferralRewardAdmin)
+    admin.add_view(CurrencySettingsAdmin)
     admin.add_view(AuditLogAdmin)
     admin.add_view(PromoCodeAdmin)
     admin.add_view(SupplierView)

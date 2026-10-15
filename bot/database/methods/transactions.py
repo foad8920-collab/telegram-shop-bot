@@ -1144,3 +1144,77 @@ async def claim_referral_reward(user_id: int, reward_id: int) -> tuple[bool, str
         logger.exception("claim_referral_reward failed: %s", e)
         return False, "transaction_error"
 
+# ============================================================
+#  Currency Rates (أسعار الصرف)
+# ============================================================
+async def get_currency_rates() -> dict:
+    """
+    قراءة أسعار الصرف من قاعدة البيانات.
+    
+    Returns:
+        {"usd_to_yer": Decimal, "usd_to_sar": Decimal, "sar_to_yer": Decimal, "is_active": bool}
+    """
+    from bot.database.models.main import CurrencyRates
+    from decimal import Decimal
+
+    try:
+        async with Database().session() as session:
+            rates = await session.get(CurrencyRates, 1)
+            if rates:
+                return {
+                    "usd_to_yer": rates.usd_to_yer,
+                    "usd_to_sar": rates.usd_to_sar,
+                    "sar_to_yer": rates.sar_to_yer,
+                    "is_active": rates.is_active,
+                }
+    except Exception as e:
+        logger.exception("get_currency_rates failed: %s", e)
+
+    # القيم الافتراضية
+    return {
+        "usd_to_yer": Decimal("533.00"),
+        "usd_to_sar": Decimal("3.70"),
+        "sar_to_yer": Decimal("140.00"),
+        "is_active": True,
+    }
+
+
+def calculate_prices(usd_price) -> dict:
+    """
+    حساب السعر بثلاث عملات بناءً على السعر بالدولار.
+    
+    Args:
+        usd_price: السعر بالدولار (Decimal, float, int, str)
+    
+    Returns:
+        {
+            "usd": Decimal,
+            "sar": Decimal,
+            "yer": int,  # تقريب للأعلى دائمًا
+        }
+    
+    ملاحظة: يجب استدعاء get_currency_rates() أولًا وتمرير النتيجة.
+    """
+    # هذا placeholder - الدالة الفعلية تحتاج rates كـ argument
+    pass
+
+
+def convert_price(usd_price, rates: dict) -> dict:
+    """
+    حساب السعر بثلاث عملات بناءً على السعر بالدولار وأسعار الصرف.
+    
+    Args:
+        usd_price: السعر بالدولار (Decimal, float, int, str)
+        rates: dict من get_currency_rates()
+    
+    Returns:
+        {"usd": Decimal, "sar": Decimal, "yer": int}
+    """
+    from decimal import Decimal, ROUND_HALF_UP, ROUND_CEILING
+
+    usd = Decimal(str(usd_price)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    sar = (usd * rates["usd_to_sar"]).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    yer = int((usd * rates["usd_to_yer"]).quantize(Decimal("1"), rounding=ROUND_CEILING))
+
+    return {"usd": usd, "sar": sar, "yer": yer}
+

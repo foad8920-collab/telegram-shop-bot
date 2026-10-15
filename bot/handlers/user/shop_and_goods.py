@@ -31,7 +31,7 @@ from bot.database.methods.pricing import apply_promo_discount
 from bot.database.methods.create import create_review, subscribe_to_stock
 from bot.database.methods.delete import unsubscribe_from_stock
 from bot.database.methods.lazy_queries import query_item_reviews
-from bot.database.methods.transactions import redeem_balance_promo
+from bot.database.methods.transactions import redeem_balance_promo, get_currency_rates, convert_price
 from bot.database.methods.audit import log_audit_bg
 from bot.database.models import Permission
 from bot.keyboards import item_info, back, lazy_paginated_keyboard
@@ -706,10 +706,28 @@ async def local_sub_details_handler(call: CallbackQuery, state: FSMContext):
             await call.answer(" نفدت الكمية من هذا الاشتراك.", show_alert=True)
             return
 
+        # حساب الأسعار بثلاث عملات
+        try:
+            rates = await get_currency_rates()
+            prices = convert_price(sub.price, rates)
+            usd_str = f"${prices['usd']}"
+            sar_str = f"{prices['sar']} ريال سعودي"
+            yer_str = f"{prices['yer']} ريال يمني"
+        except Exception:
+            usd_str = f"${sub.price}"
+            sar_str = None
+            yer_str = None
+
+        price_lines = f" السعر: <b>{usd_str}</b>" + NL
+        if sar_str:
+            price_lines += f" السعر: <b>{sar_str}</b>" + NL
+        if yer_str:
+            price_lines += f" السعر: <b>{yer_str}</b>" + NL
+
         text = (
             f" <b>{sub.name}</b>" + NL + NL
             + f" {sub.description or 'لا يوجد وصف.'}" + NL + NL
-            + f" السعر: <b>{sub.price}$</b>" + NL
+            + price_lines
             + f" المتوفر: <b>{available_qty}</b>" + NL
         )
         markup = InlineKeyboardMarkup(inline_keyboard=[
