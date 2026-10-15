@@ -51,18 +51,29 @@ async def referral_callback_handler(call: CallbackQuery, state: FSMContext):
     )
 
     #  عدادات المنتجات
+    text += "\n<b> تقدمك نحو المكافآت:</b>\n"
     if has_progress:
-        text += "\n<b> تقدمك نحو المكافآت:</b>\n"
         for item in progress[:5]:  # أول 5 منتجات فقط
             count = item["count"]
             required = item["required"]
             remaining = max(0, required - count)
             product = item["product_name"][:35]
             
+            # شريط التقدم
+            filled = "" * count
+            empty = "" * (required - count)
+            progress_bar = f"{filled}{empty}"
+            
             if count >= required:
-                text += f" <b>{product}</b>  {count}/{required} \n"
+                text += f" <b>{product}</b>\n"
+                text += f"   {progress_bar} <b>{count}/{required}</b> \n\n"
             else:
-                text += f" <b>{product}</b>  {count}/{required} (باقي {remaining})\n"
+                text += f" <b>{product}</b>\n"
+                text += f"   {progress_bar} <b>{count}/{required}</b> (باقي {remaining})\n\n"
+    else:
+        text += " <i>لا توجد إحالات بعد</i>\n"
+        text += " <b>ابدأ بدعوة أصدقائك اليوم!</b>\n"
+        text += " كل منتج يحتاج 3 مشترين فقط\n\n"
 
     #  المكافآت
     pending_rewards = [r for r in rewards if r["status"] == "pending"]
