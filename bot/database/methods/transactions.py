@@ -867,6 +867,32 @@ async def redeem_balance_promo(code: str, user_id: int) -> tuple[bool, str, Deci
 # ============================================================
 #  Referral Product Rewards (نظام الإحالة بالمكافآت)
 # ============================================================
+
+
+async def get_referral_settings() -> dict:
+    """
+    قراءة إعدادات نظام الإحالة من قاعدة البيانات.
+    
+    Returns:
+        {"required_count": 3, "is_active": True}
+    """
+    from bot.database.models.main import ReferralSettings
+    
+    try:
+        async with Database().session() as session:
+            settings = await session.get(ReferralSettings, 1)
+            if settings:
+                return {
+                    "required_count": settings.required_count,
+                    "is_active": settings.is_active,
+                }
+    except Exception as e:
+        logger.exception("get_referral_settings failed: %s", e)
+    
+    # افتراضي
+    return {"required_count": 3, "is_active": True}
+
+
 REFERRAL_REQUIRED_COUNT = 3  # عدد المشترين المطلوب للمكافأة
 
 
@@ -888,6 +914,14 @@ async def _process_referral_reward_in_session(
     )
     
     try:
+        # 0. قراءة الإعدادات
+        settings = await get_referral_settings()
+        if not settings["is_active"]:
+            logger.info("Referral system is disabled")
+            return None
+        
+        required_count = settings["required_count"]
+        
         # 1. جلب referrer_id
         user = (await session.execute(
             select(User).where(User.telegram_id == buyer_id)
@@ -936,11 +970,11 @@ async def _process_referral_reward_in_session(
         
         logger.info(
             "Referral progress: referrer=%s product=%s count=%s/%s",
-            referrer_id, product_name, current_count, REFERRAL_REQUIRED_COUNT
+            referrer_id, product_name, current_count, required_count
         )
         
         # 5. إذا وصل 3  منح مكافأة
-        if current_count >= REFERRAL_REQUIRED_COUNT:
+        if current_count >= required_count:
             # التحقق: هل حصل على المكافأة سابقًا؟
             existing_reward = (await session.execute(
                 select(ReferralReward).where(
@@ -975,7 +1009,7 @@ async def _process_referral_reward_in_session(
             "referrer_id": referrer_id,
             "product_name": product_name,
             "count": current_count,
-            "required": REFERRAL_REQUIRED_COUNT,
+            "required": required_count,
         }
         
     except Exception as e:
@@ -1009,12 +1043,16 @@ async def get_referral_progress(user_id: int) -> list[dict]:
                 .order_by(func.count().desc())
             )
             
+            #  قراءة required_count من الإعدادات
+            settings = await get_referral_settings()
+            required_count = settings["required_count"]
+            
             progress = []
             for row in result:
                 progress.append({
                     "product_name": row[0],
                     "count": row[1],
-                    "required": REFERRAL_REQUIRED_COUNT,
+                    "required": required_count,
                 })
             return progress
             
