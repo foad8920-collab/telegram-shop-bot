@@ -58,7 +58,7 @@
   "referral.title": "💚 نظام الإحالة",
   "referral.link": "🔗 الرابط: https://t.me/{bot_username}?start={user_id}",
   "referral.count": "عدد الإحالات: {count}",
-  "referral.description": "📔 يتيح لك نظام الإحالة كسب الأرباح دون أي استثمار. شارك رابطك الخاص وستحصل على {percent}% من عمليات شحن رصيد إحالاتك في البوت.",
+  "referral.description": " نظام الإحالة  اربح منتجات مجانية!\n\n كيف يعمل:\n1 شارك رابطك الخاص مع أصدقائك\n2 عندما يشتري 3 أشخاص نفس المنتج عبر رابطك\n3 تحصل على المنتج مجانًا! \n\n الشروط:\n يجب أن يكون العميل جديدًا في البوت\n الشراء يُحتسب بعد التسليم\n كل منتج له عدّاد منفصل\n لا يوجد حد أقصى للمكافآت\n كل عميل يُحتسب مرة واحدة فقط\n\n كلما دعوت أكثر، ربحت أكثر!",
   "btn.view_referrals": "👥 إحالاتي",
   "btn.view_earnings": "💰 أرباحي",
   "btn.back_to_referral": "⬅️ العودة إلى نظام الإحالة",
@@ -428,5 +428,15 @@
   "lang.ar": "🇸🇦 العربية",
   "lang.en": "🇬🇧 English",
   "lang.ru": "🇷🇺 Русский",
-  "admin.goods.add.prompt.usdt_price": "🪙 أدخل سعر المنتج (الرقم بعملة USDT):"
+  "admin.goods.add.prompt.usdt_price": "🪙 أدخل سعر المنتج (الرقم بعملة USDT):",
+  "referral.progress.title": " تقدمك نحو المكافآت:",
+  "referral.rewards.ready": " مكافآت جاهزة للاستلام: {count}",
+  "referral.reward.format": "{status} {product}  {count}/{required}",
+  "referral.how_to_win": " كيف تربح منتجًا مجانًا؟\n1 شارك رابطك مع أصدقائك\n2 عندما يشتري {required} أشخاص نفس المنتج عبر رابطك\n3 تحصل على نفس المنتج مجانًا! ",
+  "btn.claim_rewards": " استلام المكافآت",
+  "btn.view_rewards_history": " سجل المكافآت",
+  "rewards.history.title": " سجل المكافآت",
+  "rewards.history.empty": " سجل المكافآت\n\nلا توجد مكافآت بعد.\n\n شارك رابطك مع أصدقائك، وعندما يشتري 3 أشخاص نفس المنتج  تحصل عليه مجانًا! ",
+  "rewards.status.pending": "جاهزة للاستلام",
+  "rewards.status.delivered": "مُسلّمة"
 }

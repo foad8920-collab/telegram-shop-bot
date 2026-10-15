@@ -8,6 +8,10 @@ from bot.database.methods import (
     check_user_referrals, get_referral_earnings_stats, get_one_referral_earning, query_user_referrals,
     query_referral_earnings_from_user, query_all_referral_earnings,
 )
+from bot.database.methods.transactions import (
+    get_referral_progress, get_user_rewards, claim_referral_reward,
+    REFERRAL_REQUIRED_COUNT,
+)
 from bot.handlers.other import get_bot_info, display_name
 from bot.keyboards import back, referral_system_keyboard, lazy_paginated_keyboard
 from bot.misc import EnvKeys, LazyPaginator
@@ -19,7 +23,7 @@ router = Router()
 @router.callback_query(F.data == "referral_system")
 async def referral_callback_handler(call: CallbackQuery, state: FSMContext):
     """
-    Show referral info, personal invite link, and additional buttons.
+    Show referral info, personal invite link, product progress, and rewards.
     """
     user_id = call.from_user.id
     referrals_count = await check_user_referrals(user_id)
@@ -28,18 +32,46 @@ async def referral_callback_handler(call: CallbackQuery, state: FSMContext):
 
     earnings_stats = await get_referral_earnings_stats(user_id)
 
+    #  جلب العدادات والمكافآت
+    progress = await get_referral_progress(user_id)
+    rewards = await get_user_rewards(user_id)
+
     has_referrals = referrals_count > 0
     has_earnings = earnings_stats['total_earnings_count'] > 0
+    has_progress = len(progress) > 0
+    has_rewards = len(rewards) > 0
 
+    # نص أساسي
     text = (
-        f"{localize('referral.title')}\n"
-        f"{localize('referral.link', bot_username=bot_username, user_id=user_id)}\n"
-        f"{localize('referral.count', count=referrals_count)}\n"
-        f"{localize('referral.description', percent=referral_percent)}"
+        f" <b>نظام الإحالة</b>\n"
+        f"\n\n"
+        f" <b>رابطك الخاص:</b>\n"
+        f"<code>https://t.me/{bot_username}?start={user_id}</code>\n\n"
+        f" <b>عدد الإحالات:</b> {referrals_count}\n"
     )
 
+    #  عدادات المنتجات
+    if has_progress:
+        text += "\n<b> تقدمك نحو المكافآت:</b>\n"
+        for item in progress[:5]:  # أول 5 منتجات فقط
+            count = item["count"]
+            required = item["required"]
+            remaining = max(0, required - count)
+            product = item["product_name"][:35]
+            
+            if count >= required:
+                text += f" <b>{product}</b>  {count}/{required} \n"
+            else:
+                text += f" <b>{product}</b>  {count}/{required} (باقي {remaining})\n"
+
+    #  المكافآت
+    pending_rewards = [r for r in rewards if r["status"] == "pending"]
+    if pending_rewards:
+        text += f"\n<b> مكافآت جاهزة للاستلام:</b> {len(pending_rewards)}\n"
+
+    # إحصائيات الأرباح القديمة
     if has_earnings:
-        text += "\n\n" + localize('referrals.stats.template',
+        text += "\n" + localize('referrals.stats.template',
                                   active_count=earnings_stats['active_referrals_count'],
                                   total_earned=int(earnings_stats['total_amount']),
                                   total_original=int(earnings_stats['total_original_amount']),
@@ -47,8 +79,18 @@ async def referral_callback_handler(call: CallbackQuery, state: FSMContext):
                                   currency=EnvKeys.PAY_CURRENCY
                                   )
 
-    markup = referral_system_keyboard(has_referrals, has_earnings)
-    await call.message.edit_text(text, reply_markup=markup)
+    # شرح النظام
+    text += (
+        f"\n\n"
+        f" <b>كيف تربح منتجًا مجانًا؟</b>\n"
+        f"1 شارك رابطك مع أصدقائك\n"
+        f"2 عندما يشتري <b>{REFERRAL_REQUIRED_COUNT} أشخاص</b> نفس المنتج عبر رابطك\n"
+        f"3 تحصل على <b>نفس المنتج مجانًا!</b> \n"
+    )
+
+    has_pending_rewards = len(pending_rewards) > 0
+    markup = referral_system_keyboard(has_referrals, has_earnings, has_pending_rewards)
+    await call.message.edit_text(text, reply_markup=markup, parse_mode="HTML")
     await state.clear()
 
 
@@ -289,3 +331,70 @@ async def earning_detail_handler(call: CallbackQuery, state: FSMContext):
                                           original_amount=earning_info['original_amount']
                                           ), reply_markup=back(back_data))
     await state.clear()
+
+# ============================================================
+#   معالجات المكافآت
+# ============================================================
+
+@router.callback_query(F.data == "claim_rewards")
+async def claim_rewards_handler(call: CallbackQuery, state: FSMContext):
+    """استلام كل المكافآت المعلقة تلقائيًا."""
+    user_id = call.from_user.id
+    
+    # جلب المكافآت المعلقة
+    rewards = await get_user_rewards(user_id)
+    pending = [r for r in rewards if r["status"] == "pending"]
+    
+    if not pending:
+        await call.answer("لا توجد مكافآت للاستلام حاليًا.", show_alert=True)
+        return
+    
+    # استلام كل مكافأة
+    claimed = 0
+    for reward in pending:
+        ok, msg = await claim_referral_reward(user_id, reward["id"])
+        if ok:
+            claimed += 1
+    
+    # رسالة نجاح
+    if claimed > 0:
+        await call.answer(f" تم استلام {claimed} مكافأة!", show_alert=True)
+    else:
+        await call.answer(" حدث خطأ، حاول مرة أخرى.", show_alert=True)
+    
+    # إعادة عرض الصفحة الرئيسية
+    await referral_callback_handler(call, state)
+
+
+@router.callback_query(F.data == "view_rewards_history")
+async def view_rewards_history_handler(call: CallbackQuery, state: FSMContext):
+    """عرض كل المكافآت (المعلقة والمُسلّمة)."""
+    user_id = call.from_user.id
+    rewards = await get_user_rewards(user_id)
+    
+    if not rewards:
+        await call.message.edit_text(
+            " <b>سجل المكافآت</b>\n\n"
+            "لا توجد مكافآت بعد.\n\n"
+            " شارك رابطك مع أصدقائك، وعندما يشتري 3 أشخاص نفس المنتج  تحصل عليه مجانًا! ",
+            reply_markup=back("referral_system"),
+            parse_mode="HTML",
+        )
+        return
+    
+    text = " <b>سجل المكافآت</b>\n"
+    text += "\n\n"
+    
+    for r in rewards[:20]:  # أول 20
+        status_emoji = "" if r["status"] == "delivered" else ""
+        status_text = "مُسلّمة" if r["status"] == "delivered" else "جاهزة للاستلام"
+        product = r["product_name"][:40]
+        text += f"{status_emoji} <b>{product}</b>\n"
+        text += f"    {status_text}\n\n"
+    
+    await call.message.edit_text(
+        text,
+        reply_markup=back("referral_system"),
+        parse_mode="HTML",
+    )
+

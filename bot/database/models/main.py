@@ -974,3 +974,55 @@ class SupportTopic(Database.BASE):
     def __str__(self):
         return f"SupportTopic(user={self.user_id}, topic={self.topic_id})"
 
+# ============================================================
+#  Referral Product Rewards (نظام الإحالة بالمكافآت)
+# ============================================================
+class ReferralProductReward(Database.BASE):
+    """يحتسب كل عملية شراء عبر رابط الإحالة لنفس المنتج."""
+    __tablename__ = 'referral_product_rewards'
+    __table_args__ = (
+        UniqueConstraint('referred_user_id', 'product_name', 
+                        name='uq_rpr_referred_product'),
+        Index('idx_rpr_referrer', 'referrer_id', 'product_name'),
+        Index('idx_rpr_referred', 'referred_user_id'),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    referrer_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    referred_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    product_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    order_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    is_counted: Mapped[bool] = mapped_column(Boolean, default=True, server_default='true')
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    def __str__(self):
+        return f"RewardCount({self.referrer_id}:{self.product_name}:{self.referred_user_id})"
+
+
+class ReferralReward(Database.BASE):
+    """المكافآت التي حصل عليها صاحب الإحالة."""
+    __tablename__ = 'referral_rewards'
+    __table_args__ = (
+        UniqueConstraint('user_id', 'product_name', 'status', 
+                        name='uq_rr_user_product_status'),
+        Index('idx_rr_user', 'user_id', 'status'),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    product_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    reward_type: Mapped[str] = mapped_column(String(50), default='free_item', server_default='free_item')
+    status: Mapped[str] = mapped_column(String(50), default='pending', server_default='pending')
+    order_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    delivered_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    def __str__(self):
+        return f"Reward({self.user_id}:{self.product_name}:{self.status})"
+

@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import select, exists, delete as sa_delete, update as sa_update
+from sqlalchemy import func, select, exists, delete as sa_delete, update as sa_update
 from sqlalchemy.exc import IntegrityError, OperationalError, DBAPIError
 
 from bot.database.models import User, ItemValues, Goods, Categories, BoughtGoods, Payments, Operations
@@ -16,6 +16,7 @@ from bot.database.methods.read import (
 from bot.database.methods.cache_utils import safe_create_task
 from bot.database.methods.pricing import effective_price, apply_promo_discount
 from bot.database.methods.audit import log_audit
+from typing import Optional, List, Dict, Any
 
 # Canonical promo error code (from promo_rule_error) -> user-facing key per call site.
 _BUY_PROMO_ERRORS = {
@@ -257,6 +258,15 @@ async def finalize_stackvault_purchase(telegram_id: int, item_name: str, price: 
                                       bought_datetime=datetime.now(timezone.utc), unique_id=uuid4().int >> 65)
             s.add(bought_item)
             await s.flush()
+            
+            #  احتساب الإحالة (إذا كان المستخدم جاء عبر رابط إحالة)
+            try:
+                await _process_referral_reward_in_session(
+                    s, telegram_id, item_name, bought_item.id
+                )
+            except Exception as e:
+                logger.exception("Referral processing failed: %s", e)
+            
             result = {"item_name": item_name, "value": delivery, "price": float(final_price),
                       "unique_id": bought_item.unique_id, "bought_id": bought_item.id,
                       "bought_datetime": bought_item.bought_datetime.isoformat()}
@@ -853,3 +863,246 @@ async def redeem_balance_promo(code: str, user_id: int) -> tuple[bool, str, Deci
     safe_create_task(invalidate_user_cache(user_id))
     safe_create_task(invalidate_stats_cache())
     return True, "", amount
+
+# ============================================================
+#  Referral Product Rewards (نظام الإحالة بالمكافآت)
+# ============================================================
+REFERRAL_REQUIRED_COUNT = 3  # عدد المشترين المطلوب للمكافأة
+
+
+async def _process_referral_reward_in_session(
+    session,
+    buyer_id: int,
+    product_name: str,
+    order_id: Optional[int] = None,
+) -> Optional[dict]:
+    """
+    معالجة الإحالة بعد شراء ناجح.
+    تُنفّذ داخل نفس transaction الشراء.
+    
+    Returns:
+        dict إذا تمت المكافأة، None إذا لا إحالة
+    """
+    from bot.database.models.main import (
+        User, ReferralProductReward, ReferralReward
+    )
+    
+    try:
+        # 1. جلب referrer_id
+        user = (await session.execute(
+            select(User).where(User.telegram_id == buyer_id)
+        )).scalars().one_or_none()
+        
+        if not user or not user.referral_id:
+            return None  # لا يوجد referrer
+        
+        referrer_id = user.referral_id
+        
+        # 2. التحقق: هل سبق احتساب هذا العميل لهذا المنتج؟
+        existing = (await session.execute(
+            select(ReferralProductReward).where(
+                ReferralProductReward.referred_user_id == buyer_id,
+                ReferralProductReward.product_name == product_name,
+            )
+        )).scalars().first()
+        
+        if existing:
+            logger.info(
+                "Referral already counted: buyer=%s product=%s",
+                buyer_id, product_name
+            )
+            return None  # محتسب مسبقًا
+        
+        # 3. إضافة سجل الاحتساب
+        reward_count = ReferralProductReward(
+            referrer_id=referrer_id,
+            referred_user_id=buyer_id,
+            product_name=product_name,
+            order_id=order_id,
+            is_counted=True,
+        )
+        session.add(reward_count)
+        await session.flush()
+        
+        # 4. عدد الإحالات لهذا المنتج
+        count_result = await session.execute(
+            select(func.count()).select_from(ReferralProductReward).where(
+                ReferralProductReward.referrer_id == referrer_id,
+                ReferralProductReward.product_name == product_name,
+                ReferralProductReward.is_counted == True,  # noqa: E712
+            )
+        )
+        current_count = count_result.scalar() or 0
+        
+        logger.info(
+            "Referral progress: referrer=%s product=%s count=%s/%s",
+            referrer_id, product_name, current_count, REFERRAL_REQUIRED_COUNT
+        )
+        
+        # 5. إذا وصل 3  منح مكافأة
+        if current_count >= REFERRAL_REQUIRED_COUNT:
+            # التحقق: هل حصل على المكافأة سابقًا؟
+            existing_reward = (await session.execute(
+                select(ReferralReward).where(
+                    ReferralReward.user_id == referrer_id,
+                    ReferralReward.product_name == product_name,
+                    ReferralReward.status == "pending",
+                )
+            )).scalars().first()
+            
+            if not existing_reward:
+                reward = ReferralReward(
+                    user_id=referrer_id,
+                    product_name=product_name,
+                    reward_type="free_item",
+                    status="pending",
+                )
+                session.add(reward)
+                await session.flush()
+                
+                logger.info(
+                    "REFERRAL REWARD GRANTED: user=%s product=%s",
+                    referrer_id, product_name
+                )
+                
+                return {
+                    "referrer_id": referrer_id,
+                    "product_name": product_name,
+                    "reward_id": reward.id,
+                }
+        
+        return {
+            "referrer_id": referrer_id,
+            "product_name": product_name,
+            "count": current_count,
+            "required": REFERRAL_REQUIRED_COUNT,
+        }
+        
+    except Exception as e:
+        logger.exception("Referral reward processing failed: %s", e)
+        return None
+
+
+async def get_referral_progress(user_id: int) -> list[dict]:
+    """
+    جلب تقدم الإحالات لكل منتج.
+    Returns:
+        [
+            {"product_name": "...", "count": 2, "required": 3},
+            ...
+        ]
+    """
+    from bot.database.models.main import ReferralProductReward
+    
+    try:
+        async with Database().session() as session:
+            result = await session.execute(
+                select(
+                    ReferralProductReward.product_name,
+                    func.count().label("count"),
+                )
+                .where(
+                    ReferralProductReward.referrer_id == user_id,
+                    ReferralProductReward.is_counted == True,  # noqa: E712
+                )
+                .group_by(ReferralProductReward.product_name)
+                .order_by(func.count().desc())
+            )
+            
+            progress = []
+            for row in result:
+                progress.append({
+                    "product_name": row[0],
+                    "count": row[1],
+                    "required": REFERRAL_REQUIRED_COUNT,
+                })
+            return progress
+            
+    except Exception as e:
+        logger.exception("get_referral_progress failed: %s", e)
+        return []
+
+
+async def get_user_rewards(user_id: int) -> list[dict]:
+    """
+    جلب المكافآت المكتسبة.
+    Returns:
+        [
+            {"product_name": "...", "status": "pending", ...},
+            ...
+        ]
+    """
+    from bot.database.models.main import ReferralReward
+    
+    try:
+        async with Database().session() as session:
+            result = await session.execute(
+                select(ReferralReward)
+                .where(ReferralReward.user_id == user_id)
+                .order_by(ReferralReward.created_at.desc())
+            )
+            
+            rewards = []
+            for r in result.scalars().all():
+                rewards.append({
+                    "id": r.id,
+                    "product_name": r.product_name,
+                    "status": r.status,
+                    "reward_type": r.reward_type,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                })
+            return rewards
+            
+    except Exception as e:
+        logger.exception("get_user_rewards failed: %s", e)
+        return []
+
+
+async def claim_referral_reward(user_id: int, reward_id: int) -> tuple[bool, str]:
+    """
+    استلام المكافأة (إضافة المنتج للمشتريات).
+    Returns:
+        (success, message)
+    """
+    from bot.database.models.main import ReferralReward, BoughtGoods
+    from datetime import datetime, timezone
+    from uuid import uuid4
+    
+    try:
+        async with Database().session() as s:
+            reward = (await s.execute(
+                select(ReferralReward).where(
+                    ReferralReward.id == reward_id,
+                    ReferralReward.user_id == user_id,
+                    ReferralReward.status == "pending",
+                ).with_for_update()
+            )).scalars().first()
+            
+            if not reward:
+                return False, "reward_not_found"
+            
+            # أضف المنتج للمشتريات
+            bought_item = BoughtGoods(
+                item_name=reward.product_name,
+                value="مكافأة إحالة  مجانًا",
+                price=0,
+                buyer_id=user_id,
+                bought_datetime=datetime.now(timezone.utc),
+                unique_id=uuid4().int >> 65,
+            )
+            s.add(bought_item)
+            
+            reward.status = "delivered"
+            reward.order_id = bought_item.id
+            reward.delivered_at = datetime.now(timezone.utc)
+            
+            await s.flush()
+            
+            safe_create_task(invalidate_user_cache(user_id))
+            
+            return True, "success"
+            
+    except Exception as e:
+        logger.exception("claim_referral_reward failed: %s", e)
+        return False, "transaction_error"
+

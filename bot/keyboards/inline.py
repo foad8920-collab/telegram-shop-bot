@@ -485,17 +485,47 @@ def rating_keyboard() -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def referral_system_keyboard(has_referrals: bool = False, has_earnings: bool = False) -> InlineKeyboardMarkup:
+def referral_system_keyboard(
+    has_referrals: bool = False,
+    has_earnings: bool = False,
+    has_pending_rewards: bool = False,
+) -> InlineKeyboardMarkup:
     """
     Referral system keyboard with 2-column buttons.
     """
     kb = InlineKeyboardBuilder()
+    
+    #  زر المكافآت الجاهزة (في الأعلى - الأهم)
+    if has_pending_rewards:
+        kb.row(InlineKeyboardButton(
+            text=" استلام المكافآت",
+            callback_data="claim_rewards",
+            style="success",
+        ))
+    
+    # أزرار الإحالات والأرباح
     action_buttons = []
     if has_referrals:
-        action_buttons.append(InlineKeyboardButton(text=localize("btn.view_referrals"), callback_data="view_referrals"))
+        action_buttons.append(InlineKeyboardButton(
+            text=localize("btn.view_referrals"),
+            callback_data="view_referrals",
+        ))
     if has_earnings:
-        action_buttons.append(InlineKeyboardButton(text=localize("btn.view_earnings"), callback_data="view_all_earnings"))
+        action_buttons.append(InlineKeyboardButton(
+            text=localize("btn.view_earnings"),
+            callback_data="view_all_earnings",
+        ))
     if action_buttons:
         kb.row(*action_buttons)
-    kb.row(InlineKeyboardButton(text=localize("btn.back"), callback_data="profile"))
+    
+    #  زر عرض كل المكافآت (حتى المُسلّمة)
+    kb.row(InlineKeyboardButton(
+        text=" سجل المكافآت",
+        callback_data="view_rewards_history",
+    ))
+    
+    kb.row(InlineKeyboardButton(
+        text=localize("btn.back"),
+        callback_data="profile",
+    ))
     return kb.as_markup()
