@@ -38,12 +38,12 @@
           </div>
           <div class="col-md-6">
             <div class="btn-group flex-wrap" data-toggle="buttons">
-              <input type="submit" name="save" value="حفظ" class="btn">
-              <input type="submit" name="save" value="حفظ ومتابعة التعديل" class="btn">
+              <button type="submit" name="save" value="save" class="btn">حفظ</button>
+              <button type="submit" name="save" value="continue" class="btn">حفظ ومتابعة التعديل</button>
               {% if model_view.save_as %}
-              <input type="submit" name="save" value="حفظ كجديد" class="btn">
-              {% else %}
-              <input type="submit" name="save" value="حفظ وإضافة آخر" class="btn">
+              <button type="submit" name="save" value="add_another" class="btn">حفظ كجديد</button>
+              {% elif model_view.can_create %}
+              <button type="submit" name="save" value="add_another" class="btn">حفظ وإضافة آخر</button>
               {% endif %}
             </div>
           </div>

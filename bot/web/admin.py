@@ -198,6 +198,26 @@ def set_notifier_bot(bot: Any) -> None:
 
 # Audited base view for mutable models
 class AuditModelView(ModelView):
+
+    async def edit(self, request):
+        response = await super().edit(request)
+        if isinstance(response, RedirectResponse):
+            loc = response.headers.get("location", "")
+            if "/create" in loc:
+                return RedirectResponse(
+                    request.url_for("admin:list", identity=self.identity),
+                    status_code=303,
+                )
+        return response
+
+    async def create(self, request):
+        if not self.can_create:
+            return RedirectResponse(
+                request.url_for("admin:list", identity=self.identity),
+                status_code=303,
+            )
+        return await super().create(request)
+
     async def after_model_change(self, data: dict, model: Any, is_created: bool, request: Request) -> None:
         action = f"sqladmin_{'create' if is_created else 'update'}"
         await log_audit(
@@ -522,7 +542,7 @@ class ReferralSettingsAdmin(AuditModelView, model=ReferralSettings):
     column_default_sort = (ReferralSettings.id, False)
     
     # السماح بالتعديل فقط (لا إنشاء/حذف)
-    can_create = False
+    can_create = True
     can_delete = False
     can_edit = True
 
