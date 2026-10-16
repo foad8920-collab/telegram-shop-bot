@@ -1539,6 +1539,11 @@ class SupplierView(ModelView, model=Supplier):
         "auto_purchase_error": "خطأ الشراء التلقائي",
         "notes": "ملاحظات",
     }
+
+    column_formatters = {
+        "last_sync_at": lambda m, a: fmt_dt_smart(getattr(m, "last_sync_at", None)),
+        "last_balance_check": lambda m, a: fmt_dt_smart(getattr(m, "last_balance_check", None)),
+    }
     page_size = 25
 
     form_columns = [
