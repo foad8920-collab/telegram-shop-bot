@@ -48,7 +48,7 @@ class _Abort(Exception):
 
 
 def _split_amount(total: Decimal, n: int) -> list[Decimal]:
-    """Split `total` into \n` amounts that sum back to it exactly.
+    """Split `total` into `n` amounts that sum back to it exactly.
 
     A cart line is priced as a whole (a fixed promo comes off the line once),
     but each delivered unit gets its own BoughtGoods row. Dividing the line by
