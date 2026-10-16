@@ -49,6 +49,7 @@ class EnvKeys(ABC):
     REDIS_PORT: Final = int(_get_optional("REDIS_PORT", "6379"))
     REDIS_DB: Final = int(_get_optional("REDIS_DB", "0"))
     REDIS_PASSWORD: Final = _get_optional("REDIS_PASSWORD", "")
+    REDIS_SSL: Final = _get_optional("REDIS_SSL", "0")
 
     # Payments
     PANDORA_API_KEY: Final = _get_optional("PANDORA_API_KEY", "")

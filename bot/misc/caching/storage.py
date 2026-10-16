@@ -21,7 +21,9 @@ async def get_redis_storage() -> Optional[RedisStorage]:
         return None
 
     redis = None
+    use_ssl = getattr(EnvKeys, "REDIS_SSL", "0") == "1"
     try:
+        # Upstash/cloud Redis requires TLS. Enable via REDIS_SSL=1 in .env.
         redis = Redis(
             host=EnvKeys.REDIS_HOST,
             port=EnvKeys.REDIS_PORT,
@@ -30,6 +32,7 @@ async def get_redis_storage() -> Optional[RedisStorage]:
             decode_responses=False,
             socket_connect_timeout=5,
             socket_timeout=5,
+            ssl=use_ssl,
         )
 
         await redis.ping()
