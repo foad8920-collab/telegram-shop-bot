@@ -28,8 +28,25 @@ class StackVaultClient:
         "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
     }
 
-    def __init__(self) -> None:
+    def __init__(self, api_url: str | None = None, api_key: str | None = None) -> None:
+        self._api_url_override = api_url
+        self._api_key_override = api_key
         self._session: aiohttp.ClientSession | None = None
+
+    async def _load_credentials(self) -> tuple[str, str]:
+        """قراءة api_url و api_key من DB (id=1) مع fallback إلى env."""
+        if self._api_url_override and self._api_key_override:
+            return self._api_url_override, self._api_key_override
+        try:
+            from bot.database.main import Database
+            from bot.database.models.main import Supplier
+            async with Database().session() as session:
+                sup = await session.get(Supplier, 1)
+                if sup and sup.api_url and sup.api_key:
+                    return sup.api_url, sup.api_key
+        except Exception as e:
+            logger.warning("Failed to read StackVault credentials from DB: %s", e)
+        return EnvKeys.STACKVAULT_API_URL, EnvKeys.STACKVAULT_API_KEY
 
     def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -47,18 +64,19 @@ class StackVaultClient:
     async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
         await self.close()
 
-    def _get_auth_headers(self) -> dict[str, str]:
+    def _get_auth_headers(self, api_key: str | None = None) -> dict[str, str]:
         """Combine base headers with Authorization token."""
         headers = self._base_headers.copy()
-        headers["Authorization"] = f"Bearer {EnvKeys.STACKVAULT_API_KEY}"
+        headers["Authorization"] = f"Bearer {api_key or EnvKeys.STACKVAULT_API_KEY}"
         return headers
 
     async def get_products(self) -> list[dict[str, Any]]:
-        if not EnvKeys.STACKVAULT_API_KEY:
+        api_url, api_key = await self._load_credentials()
+        if not api_key:
             raise StackVaultAPIError("STACKVAULT_API_KEY is not configured")
 
-        url = f"{EnvKeys.STACKVAULT_API_URL.rstrip('/')}/products"
-        headers = self._get_auth_headers()
+        url = f"{api_url.rstrip('/')}/products"
+        headers = self._get_auth_headers(api_key)
         try:
             session = self._get_session()
             async with session.get(url, headers=headers) as response:

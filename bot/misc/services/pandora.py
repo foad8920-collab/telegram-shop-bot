@@ -32,9 +32,27 @@ class PandoraClient:
     DEFAULT_BASE_URL = "https://api.pandoradigital.shop/api/v1"
     _timeout = aiohttp.ClientTimeout(total=30)
 
-    def __init__(self) -> None:
+    def __init__(self, api_url: str | None = None, api_key: str | None = None) -> None:
+        self._api_url_override = api_url
+        self._api_key_override = api_key
         self._session: aiohttp.ClientSession | None = None
         self.pages_fetched = 0
+
+    async def _load_credentials(self) -> tuple[str, str]:
+        """قراءة api_url و api_key من DB (id=2) مع fallback إلى env."""
+        if self._api_url_override and self._api_key_override:
+            return self._api_url_override, self._api_key_override
+        try:
+            from bot.database.main import Database
+            from bot.database.models.main import Supplier
+            async with Database().session() as session:
+                sup = await session.get(Supplier, 2)
+                if sup and sup.api_url and sup.api_key:
+                    return sup.api_url, sup.api_key
+        except Exception:
+            pass
+        base_url = os.getenv("PANDORA_API_URL", self.DEFAULT_BASE_URL)
+        return base_url, EnvKeys.PANDORA_API_KEY
 
     def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -53,12 +71,13 @@ class PandoraClient:
 
     async def get_products(self) -> list[dict[str, Any]]:
         """Retrieve all products, stopping on an empty or repeated cursor."""
-        if not EnvKeys.PANDORA_API_KEY:
+        api_url, api_key = await self._load_credentials()
+        if not api_key:
             raise PandoraAPIError("PANDORA_API_KEY is not configured")
 
-        base_url = os.getenv("PANDORA_API_URL", self.DEFAULT_BASE_URL).rstrip("/")
+        base_url = api_url.rstrip("/")
         url = f"{base_url}/products"
-        headers = {"Authorization": f"Bearer {EnvKeys.PANDORA_API_KEY}"}
+        headers = {"Authorization": f"Bearer {api_key}"}
         params: dict[str, Any] = {"limit": 100}
         seen_cursors: set[str] = set()
         products: list[dict[str, Any]] = []
