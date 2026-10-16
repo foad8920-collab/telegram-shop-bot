@@ -15,6 +15,7 @@ from sqlalchemy import select, distinct
 from bot.handlers.user.shop_and_goods import _shorten
 from bot.database.main import Database
 from bot.database.models.main import Supplier, SupplierProduct
+from bot.database.methods.transactions import format_price_arabic_async
 
 
 logger = logging.getLogger(__name__)
@@ -526,7 +527,8 @@ async def supplier_product_detail_handler(call: CallbackQuery, state: FSMContext
     if desc:
         lines.append(f" {desc}")
         lines.append("")
-    lines.append(f" السعر: <b>{price}</b>")
+    price_block = await format_price_arabic_async(prod.selling_price or 0)
+    lines.append(price_block)
     lines.append(f" {status}")
 
     text = NL.join(lines)
