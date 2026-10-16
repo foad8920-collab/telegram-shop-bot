@@ -94,6 +94,7 @@ from bot.database.models.main import (
     AuditLog, PromoCodes, CartItems, Reviews, promo_scope_for,
 )
 from bot.misc.metrics import get_metrics
+from bot.web.formatters import fmt_dt_smart, fmt_dt_full
 from bot.misc.caching import get_cache_manager
 from bot.database.methods.read import (
     invalidate_user_cache, invalidate_item_cache, invalidate_rating_cache, get_item_name_by_id,
@@ -733,6 +734,10 @@ class UserActivityAdmin(ModelView, model=UserActivity):
     can_edit = False
     can_delete = True
     page_size = 50
+
+    column_formatters = {
+        "created_at": lambda m, a: fmt_dt_smart(getattr(m, "created_at", None)),
+    }
 
 
 class AuditLogAdmin(ModelView, model=AuditLog):
