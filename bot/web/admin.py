@@ -256,6 +256,10 @@ class UserAdmin(AuditModelView, model=User):
     column_labels = {"telegram_id": "معرّف Telegram", "balance": "الرصيد", "role_id": "الدور", "referral_id": "المعرّف المُحيل", "registration_date": "تاريخ التسجيل", "is_blocked": "محظور"}
     icon = "fa-solid fa-users"
 
+    column_formatters = {
+        "registration_date": lambda m, a: fmt_dt_smart(getattr(m, "registration_date", None)),
+    }
+
     async def _invalidate(self, model: Any, *, blocked: bool | None = None) -> None:
         # A web edit of balance/role_id/is_blocked would otherwise be served stale
         # from Redis (user/role, up to 600s) and from the middleware's in-memory
@@ -469,6 +473,11 @@ class BoughtGoodsAdmin(ModelView, model=BoughtGoods):
     icon = "fa-solid fa-cart-shopping"
 
 
+    column_formatters = {
+        "bought_datetime": lambda m, a: fmt_dt_smart(getattr(m, "bought_datetime", None)),
+    }
+
+
 class OperationsAdmin(ModelView, model=Operations):
     column_list = [Operations.id, Operations.user_id, Operations.operation_value,
                    Operations.operation_time]
@@ -482,6 +491,11 @@ class OperationsAdmin(ModelView, model=Operations):
     name_plural = "العمليات"
     column_labels = {"id": "الرقم", "user_id": "المستخدم", "operation_value": "قيمة العملية", "operation_time": "وقت العملية"}
     icon = "fa-solid fa-money-bill-transfer"
+
+
+    column_formatters = {
+        "operation_time": lambda m, a: fmt_dt_smart(getattr(m, "operation_time", None)),
+    }
 
 
 class PaymentsAdmin(ModelView, model=Payments):
@@ -499,6 +513,11 @@ class PaymentsAdmin(ModelView, model=Payments):
     icon = "fa-solid fa-credit-card"
 
 
+    column_formatters = {
+        "created_at": lambda m, a: fmt_dt_smart(getattr(m, "created_at", None)),
+    }
+
+
 class ReferralEarningsAdmin(ModelView, model=ReferralEarnings):
     column_list = [ReferralEarnings.id, ReferralEarnings.referrer_id,
                    ReferralEarnings.referral_id, ReferralEarnings.amount,
@@ -513,6 +532,11 @@ class ReferralEarningsAdmin(ModelView, model=ReferralEarnings):
     name_plural = "أرباح الإحالات"
     column_labels = {"id": "الرقم", "referrer_id": "المُحيل", "referral_id": "المُحال", "amount": "المبلغ", "original_amount": "المبلغ الأصلي", "created_at": "تاريخ الإنشاء"}
     icon = "fa-solid fa-handshake"
+
+
+    column_formatters = {
+        "created_at": lambda m, a: fmt_dt_smart(getattr(m, "created_at", None)),
+    }
 
 
 # ============================================================
@@ -547,6 +571,11 @@ class ReferralSettingsAdmin(AuditModelView, model=ReferralSettings):
     can_create = True
     can_delete = False
     can_edit = True
+
+
+    column_formatters = {
+        "updated_at": lambda m, a: fmt_dt_smart(getattr(m, "updated_at", None)),
+    }
 
 
 class ReferralProductRewardAdmin(ModelView, model=ReferralProductReward):
@@ -588,6 +617,11 @@ class ReferralProductRewardAdmin(ModelView, model=ReferralProductReward):
     can_create = False
     can_edit = False
     can_delete = True  # للسماح بحذف سجلات خاطئة
+
+
+    column_formatters = {
+        "created_at": lambda m, a: fmt_dt_smart(getattr(m, "created_at", None)),
+    }
 
 
 class ReferralRewardAdmin(ModelView, model=ReferralReward):
@@ -632,6 +666,12 @@ class ReferralRewardAdmin(ModelView, model=ReferralReward):
     can_create = False
     can_edit = True  # للسماح بتغيير الحالة يدويًا
     can_delete = True
+
+
+    column_formatters = {
+        "delivered_at": lambda m, a: fmt_dt_smart(getattr(m, "delivered_at", None)),
+        "created_at": lambda m, a: fmt_dt_smart(getattr(m, "created_at", None)),
+    }
 
 
 # ============================================================
@@ -683,6 +723,11 @@ class CurrencySettingsAdmin(AuditModelView, model=CurrencyRates):
 
     def __str__(self):
         return f"CurrencyRates(USD-YER={self.usd_to_yer})"
+
+
+    column_formatters = {
+        "updated_at": lambda m, a: fmt_dt_smart(getattr(m, "updated_at", None)),
+    }
 
 
 # ============================================================
@@ -754,6 +799,10 @@ class AuditLogAdmin(ModelView, model=AuditLog):
     name_plural = "سجل التدقيق"
     column_labels = {"id": "الرقم", "timestamp": "الوقت", "level": "المستوى", "user_id": "المستخدم", "action": "الإجراء", "resource_type": "نوع المورد", "resource_id": "معرّف المورد", "details": "التفاصيل", "ip_address": "عنوان IP"}
     icon = "fa-solid fa-clipboard-list"
+
+    column_formatters = {
+        "timestamp": lambda m, a: fmt_dt_smart(getattr(m, "timestamp", None)),
+    }
 
 
 def _format_promo_scope_html(model, name):
@@ -913,6 +962,11 @@ class CartItemsAdmin(ModelView, model=CartItems):
     icon = "fa-solid fa-cart-plus"
 
 
+    column_formatters = {
+        "added_at": lambda m, a: fmt_dt_smart(getattr(m, "added_at", None)),
+    }
+
+
 
 class ReviewsAdmin(AuditModelView, model=Reviews):
     column_list = [Reviews.id, Reviews.user_id, Reviews.item_id,
@@ -941,6 +995,11 @@ class ReviewsAdmin(AuditModelView, model=Reviews):
     async def after_model_delete(self, model: Any, request: Request) -> None:
         await super().after_model_delete(model, request)
         await self._invalidate(model)
+
+
+    column_formatters = {
+        "created_at": lambda m, a: fmt_dt_smart(getattr(m, "created_at", None)),
+    }
 
 
 # Health & Metrics Endpoints
@@ -1153,6 +1212,11 @@ class SupplierPricingRuleAdmin(ModelView, model=SupplierPricingRule):
         return f"Pricing #{self.id}"
 
 
+    column_formatters = {
+        "updated_at": lambda m, a: fmt_dt_smart(getattr(m, "updated_at", None)),
+    }
+
+
 class SupplierCategoryMarkupAdmin(ModelView, model=SupplierCategoryMarkup):
     """Category-specific markup overrides."""
     name = "تسعير الفئات"
@@ -1212,6 +1276,11 @@ class SupplierPriceOverrideAdmin(ModelView, model=SupplierPriceOverride):
 
     def __str__(self):
         return f"Override {self.external_id} -> {self.fixed_price}"
+
+
+    column_formatters = {
+        "created_at": lambda m, a: fmt_dt_smart(getattr(m, "created_at", None)),
+    }
 
 
 class SupplierOrderAdmin(ModelView, model=SupplierOrder):
@@ -1402,6 +1471,11 @@ class SupplierProductAdmin(ModelView, model=SupplierProduct):
 
     def __str__(self):
         return self.name or ""
+
+
+    column_formatters = {
+        "last_synced_at": lambda m, a: fmt_dt_smart(getattr(m, "last_synced_at", None)),
+    }
 
 
 class SupplierView(ModelView, model=Supplier):
@@ -1790,6 +1864,8 @@ class LocalSubscriptionOrderAdmin(ModelView, model=LocalSubscriptionOrder):
     column_formatters = {
         "status": lambda m, a: LocalSubscriptionOrderAdmin.status_badge(m, a),
         "subscription_name": lambda m, a: LocalSubscriptionOrderAdmin.subscription_name_label(m, a),
+        "created_at": lambda m, a: fmt_dt_smart(getattr(m, "created_at", None)),
+        "decided_at": lambda m, a: fmt_dt_smart(getattr(m, "decided_at", None)),
     }
 
     def __str__(self):
