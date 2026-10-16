@@ -1540,10 +1540,6 @@ class SupplierView(ModelView, model=Supplier):
         "notes": "ملاحظات",
     }
 
-    column_formatters = {
-        "last_sync_at": lambda m, a: fmt_dt_smart(getattr(m, "last_sync_at", None)),
-        "last_balance_check": lambda m, a: fmt_dt_smart(getattr(m, "last_balance_check", None)),
-    }
     page_size = 25
 
     form_columns = [
@@ -1624,6 +1620,8 @@ class SupplierView(ModelView, model=Supplier):
         "sync_interval_minutes": lambda m, a: SupplierView.interval_label(m, a),
         "auto_purchase_enabled": lambda m, a: SupplierView.auto_purchase_badge(m, a),
         "provider_balance": lambda m, a: SupplierView.balance_badge(m, a),
+        "last_sync_at": lambda m, a: fmt_dt_smart(getattr(m, "last_sync_at", None)),
+        "last_balance_check": lambda m, a: fmt_dt_smart(getattr(m, "last_balance_check", None)),
     }
 
     @action(
