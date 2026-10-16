@@ -20,7 +20,7 @@ from bot.misc import EnvKeys
 from bot.handlers import register_all_handlers
 from bot.database.models import register_models
 from bot.logger_mesh import configure_logging
-from bot.middleware import setup_rate_limiting, RateLimitConfig, I18nMiddleware
+from bot.middleware import setup_rate_limiting, RateLimitConfig, I18nMiddleware, ActivityLoggerMiddleware
 from bot.middleware.dispatcher_ctx import DispatcherMiddleware
 from bot.middleware.security import SecurityMiddleware, AuthenticationMiddleware, set_auth_middleware
 from bot.misc.caching import init_cache_manager, get_cache_manager
@@ -28,6 +28,7 @@ from bot.misc.caching import CacheScheduler
 from bot.misc.caching import get_redis_storage
 from bot.misc.services import RecoveryManager, CleanupManager
 from bot.misc.services.supplier_scheduler import get_scheduler
+from bot.misc.services.activity_cleanup import get_activity_cleanup_scheduler
 from bot.misc.metrics import init_metrics, get_metrics, AnalyticsMiddleware
 from bot.database.main import Database as _Database
 
@@ -82,7 +83,12 @@ def _register_middlewares(
     dp.message.middleware(security_middleware)
     dp.callback_query.middleware(security_middleware)
 
-    logging.info("Security and i18n middlewares initialized")
+    # Activity logger (يسجّل كل نشاط)
+    activity_logger = ActivityLoggerMiddleware()
+    dp.message.middleware(activity_logger)
+    dp.callback_query.middleware(activity_logger)
+
+    logging.info("Security, i18n, and activity logger middlewares initialized")
 
 
 async def _setup_caching(storage) -> Optional[CacheScheduler]:
@@ -176,6 +182,13 @@ async def _startup(dp: Dispatcher, bot: Bot, ctx: AppContext, storage) -> None:
         logging.info("Supplier sync scheduler started")
     except Exception as e:
         logging.error(f"Failed to start supplier scheduler: {e}")
+
+    # Start activity cleanup scheduler (auto-delete > 30 days)
+    try:
+        get_activity_cleanup_scheduler().start()
+        logging.info("Activity cleanup scheduler started")
+    except Exception as e:
+        logging.error(f"Failed to start activity cleanup scheduler: {e}")
 
 async def warm_up_critical_caches():
     """Warming of critical caches at startup"""
@@ -274,6 +287,13 @@ async def _shutdown(ctx: AppContext, bot: Bot) -> None:
         logging.info("Supplier sync scheduler stopped")
     except Exception as e:
         logging.error(f"Failed to stop supplier scheduler: {e}")
+
+    # Stop activity cleanup scheduler
+    try:
+        await get_activity_cleanup_scheduler().stop()
+        logging.info("Activity cleanup scheduler stopped")
+    except Exception as e:
+        logging.error(f"Failed to stop activity cleanup scheduler: {e}")
 
 
 def _configure_logging() -> None:

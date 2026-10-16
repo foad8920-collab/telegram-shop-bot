@@ -90,7 +90,7 @@ from bot.database.models.main import (
     User, Role, Categories, Goods, ItemValues,
     BoughtGoods, Operations, Payments, ReferralEarnings,
     ReferralSettings, ReferralProductReward, ReferralReward,
-    CurrencyRates,
+    CurrencyRates, UserActivity,
     AuditLog, PromoCodes, CartItems, Reviews, promo_scope_for,
 )
 from bot.misc.metrics import get_metrics
@@ -682,6 +682,57 @@ class CurrencySettingsAdmin(AuditModelView, model=CurrencyRates):
 
     def __str__(self):
         return f"CurrencyRates(USD-YER={self.usd_to_yer})"
+
+
+# ============================================================
+#  User Activity Log (سجل نشاط المستخدمين)
+# ============================================================
+class UserActivityAdmin(ModelView, model=UserActivity):
+    """سجل كل نشاط مهم قام به المستخدم في البوت."""
+    name = "نشاط مستخدم"
+    name_plural = "سجل نشاط المستخدمين"
+    icon = "fa-solid fa-user-clock"
+
+    column_list = [
+        UserActivity.id,
+        UserActivity.user_id,
+        UserActivity.first_name,
+        UserActivity.username,
+        UserActivity.action_ar,
+        UserActivity.target,
+        UserActivity.target_type,
+        UserActivity.created_at,
+    ]
+    column_labels = {
+        "id": "الرقم",
+        "user_id": "معرّف المستخدم",
+        "first_name": "الاسم",
+        "username": "اسم المستخدم",
+        "action_ar": "الإجراء",
+        "target": "الهدف",
+        "target_type": "نوع الهدف",
+        "details": "التفاصيل",
+        "created_at": "الوقت",
+    }
+    column_searchable_list = [
+        UserActivity.user_id,
+        UserActivity.username,
+        UserActivity.target,
+    ]
+    column_sortable_list = [
+        UserActivity.id,
+        UserActivity.created_at,
+    ]
+    column_default_sort = (UserActivity.created_at, True)
+    column_filters = [
+        UserActivity.action_type,
+        UserActivity.target_type,
+    ]
+
+    can_create = False
+    can_edit = False
+    can_delete = True
+    page_size = 50
 
 
 class AuditLogAdmin(ModelView, model=AuditLog):
@@ -1884,6 +1935,7 @@ def create_admin_app(bot: Any = None) -> Starlette:
     admin.add_view(ReferralProductRewardAdmin)
     admin.add_view(ReferralRewardAdmin)
     admin.add_view(CurrencySettingsAdmin)
+    admin.add_view(UserActivityAdmin)
     admin.add_view(AuditLogAdmin)
     admin.add_view(PromoCodeAdmin)
     admin.add_view(SupplierView)

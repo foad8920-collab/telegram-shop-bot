@@ -1080,3 +1080,30 @@ class CurrencyRates(Database.BASE):
     def __str__(self):
         return f"CurrencyRates(USD-YER={self.usd_to_yer}, USD-SAR={self.usd_to_sar}, SAR-YER={self.sar_to_yer})"
 
+# ============================================================
+#  User Activity Log (سجل نشاط المستخدمين)
+# ============================================================
+class UserActivity(Database.BASE):
+    """سجل كل نشاط مهم يقوم به المستخدم في البوت."""
+    __tablename__ = 'user_activities'
+    __table_args__ = (
+        Index('ix_ua_user_time', 'user_id', 'created_at'),
+        Index('ix_ua_action', 'action_type', 'created_at'),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    username: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    first_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    action_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    action_ar: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    target: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    target_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    details: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
+    )
+
+    def __str__(self):
+        return f"{self.user_id}: {self.action_type} -> {self.target or '-'}"
+
