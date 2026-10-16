@@ -48,7 +48,7 @@ class _Abort(Exception):
 
 
 def _split_amount(total: Decimal, n: int) -> list[Decimal]:
-    """Split `total` into `n` amounts that sum back to it exactly.
+    """Split `total` into \n` amounts that sum back to it exactly.
 
     A cart line is priced as a whole (a fixed promo comes off the line once),
     but each delivered unit gets its own BoughtGoods row. Dividing the line by
@@ -1218,3 +1218,34 @@ def convert_price(usd_price, rates: dict) -> dict:
 
     return {"usd": usd, "sar": sar, "yer": yer}
 
+
+
+def format_price_arabic(usd_price, rates: dict = None) -> str:
+    """
+    يبني نص عرض السعر بثلاث عملات (USD / SAR / YER) بأسلوب عربي موحّد.
+
+    Args:
+        usd_price: السعر بالدولار (Decimal, float, int, str)
+        rates: dict اختياري من get_currency_rates().
+
+    Returns:
+        نص HTML جاهز للعرض.
+    """
+    from decimal import Decimal as _D
+    if rates is None:
+        rates = {
+            "usd_to_yer": _D("533.00"),
+            "usd_to_sar": _D("3.70"),
+        }
+    prices = convert_price(usd_price, rates)
+    return (
+        f" السعر: <b>${prices['usd']}</b>\n"
+        f" السعر: <b>{prices['sar']} ريال سعودي</b>\n"
+        f" السعر: <b>{prices['yer']} ريال يمني</b>"
+    )
+
+
+async def format_price_arabic_async(usd_price) -> str:
+    """نسخة async تجلب أسعار الصرف من DB تلقائيًا."""
+    rates = await get_currency_rates()
+    return format_price_arabic(usd_price, rates)

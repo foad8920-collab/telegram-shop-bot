@@ -20,6 +20,7 @@ from bot.database.models.main import (
 )
 from bot.states import SupplierBuy
 from bot.misc import EnvKeys
+from bot.database.methods.transactions import format_price_arabic_async
 
 
 logger = logging.getLogger(__name__)
@@ -199,10 +200,11 @@ async def supplier_buy_start(call: CallbackQuery, state: FSMContext) -> None:
     )
     await state.set_state(SupplierBuy.choosing_quantity)
 
+    price_block = await format_price_arabic_async(price)
     text = NL.join([
         f"<b>{name}</b>",
         "====================",
-        f"السعر للوحدة: <b>{_fmt(price)}</b>",
+        price_block,
         f"المتوفر: <b>{max_qty}</b>",
         "",
         "<b>اختر الكمية المطلوبة:</b>",
