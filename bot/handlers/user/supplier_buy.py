@@ -81,7 +81,7 @@ def _get_admin_ids() -> list[int]:
 #  Quantity keyboard (smart presets)
 # ============================================================
 
-def _quantity_keyboard(product_id: int, max_qty: int) -> InlineKeyboardMarkup:
+def _quantity_keyboard(product_id: int, max_qty: int, supplier_id: int = 0) -> InlineKeyboardMarkup:
     """Smart quantity picker (presets + manual)."""
     rows: list[list[InlineKeyboardButton]] = []
 
@@ -115,14 +115,14 @@ def _quantity_keyboard(product_id: int, max_qty: int) -> InlineKeyboardMarkup:
     )])
     rows.append([InlineKeyboardButton(
         text="رجوع",
-        callback_data=f"sv_prod:0:{product_id}",
+        callback_data=f"sv_prod:{supplier_id}:{product_id}",
         style="primary",
     )])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _payment_keyboard(product_id: int, qty: int, total: Decimal,
-                      balance: Decimal, methods: list) -> InlineKeyboardMarkup:
+                      balance: Decimal, methods: list, supplier_id: int = 0) -> InlineKeyboardMarkup:
     """Payment method picker."""
     rows: list[list[InlineKeyboardButton]] = []
 
@@ -151,7 +151,7 @@ def _payment_keyboard(product_id: int, qty: int, total: Decimal,
 
     rows.append([InlineKeyboardButton(
         text="رجوع",
-        callback_data=f"sv_prod:0:{product_id}",
+        callback_data=f"sv_prod:{supplier_id}:{product_id}",
         style="primary",
     )])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -210,10 +210,10 @@ async def supplier_buy_start(call: CallbackQuery, state: FSMContext) -> None:
 
     try:
         await call.message.edit_text(text, parse_mode="HTML",
-                                     reply_markup=_quantity_keyboard(product_id, max_qty))
+                                     reply_markup=_quantity_keyboard(product_id, max_qty, supplier_id))
     except TelegramBadRequest:
         await call.message.answer(text, parse_mode="HTML",
-                                  reply_markup=_quantity_keyboard(product_id, max_qty))
+                                  reply_markup=_quantity_keyboard(product_id, max_qty, supplier_id))
 
 
 @router.callback_query(F.data.startswith("sb_qty:"), SupplierBuy.choosing_quantity)
@@ -234,6 +234,7 @@ async def supplier_buy_qty_selected(call: CallbackQuery, state: FSMContext) -> N
         return
 
     max_qty = int(data.get("sb_max_qty", 0))
+    supplier_id = int(data.get("sb_supplier_id", 0))
     if qty < 1 or qty > max_qty:
         await call.answer("الكمية غير صالحة.", show_alert=True)
         return
@@ -270,7 +271,7 @@ async def supplier_buy_qty_selected(call: CallbackQuery, state: FSMContext) -> N
 
     try:
         await call.message.edit_text(text, parse_mode="HTML",
-            reply_markup=_payment_keyboard(product_id, qty, total, balance, methods))
+            reply_markup=_payment_keyboard(product_id, qty, total, balance, methods, supplier_id))
     except TelegramBadRequest:
         pass
 
@@ -307,7 +308,7 @@ async def supplier_buy_qty_manual(call: CallbackQuery, state: FSMContext) -> Non
     try:
         await call.message.edit_text(text, parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="رجوع", callback_data=f"sv_prod:0:{product_id}", style="primary"),
+                InlineKeyboardButton(text="رجوع", callback_data=f"sv_prod:{supplier_id}:{product_id}", style="primary"),
             ]]))
     except TelegramBadRequest:
         pass
@@ -331,6 +332,7 @@ async def supplier_buy_qty_manual_receive(message: Message, state: FSMContext) -
 
     data = await state.get_data()
     product_id = data.get("sb_product_id")
+    supplier_id = int(data.get("sb_supplier_id", 0))
     max_qty = int(data.get("sb_max_qty", 0))
 
     if not product_id:
@@ -375,7 +377,7 @@ async def supplier_buy_qty_manual_receive(message: Message, state: FSMContext) -
     ])
 
     await message.answer(text, parse_mode="HTML",
-        reply_markup=_payment_keyboard(product_id, qty, total, balance, methods))
+        reply_markup=_payment_keyboard(product_id, qty, total, balance, methods, supplier_id))
 
 
 @router.callback_query(F.data == "sb_insufficient")
@@ -591,7 +593,7 @@ async def supplier_buy_wallet(call: CallbackQuery, state: FSMContext) -> None:
     try:
         await call.message.edit_text(text, parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="الغاء", callback_data=f"sv_prod:0:{product_id}", style="danger"),
+                InlineKeyboardButton(text="الغاء", callback_data=f"sv_prod:{supplier_id}:{product_id}", style="danger"),
             ]]))
     except TelegramBadRequest:
         pass
