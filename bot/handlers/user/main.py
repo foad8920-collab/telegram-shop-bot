@@ -404,7 +404,7 @@ async def profile_callback_handler(call: CallbackQuery, state: FSMContext):
         f"{localize('profile.caption', name=_esc(tg_user.first_name or ''), id=user_id)}\n"
         f"{localize('profile.id', id=user_id)}\n"
         f"{localize('profile.balance', amount=balance, currency=EnvKeys.PAY_CURRENCY)}\n"
-        f"{localize('profile.total_topup', amount=overall_balance, currency=EnvKeys.PAY_CURRENCY)}\n"
+
         f"{localize('profile.purchased_count', count=items)}"
     )
     try:
