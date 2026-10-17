@@ -14,6 +14,7 @@ from sqlalchemy import select
 from bot.database.main import Database
 from bot.database.models.main import TopUpRequest, User
 from bot.handlers.user.balance_and_payment import _get_admin_ids_topup as _get_admin_ids
+from bot.database.methods.read import invalidate_user_cache
 
 
 def _fmt(value) -> str:
@@ -50,6 +51,7 @@ async def approve(call: CallbackQuery) -> None:
             req.admin_id = call.from_user.id
             req.reviewed_at = datetime.now(timezone.utc)
             await session.commit()
+            await invalidate_user_cache(req.user_id)
 
     # تحديث رسالة المشرف
     try:
@@ -166,6 +168,7 @@ async def edit_confirm(message: Message, state: FSMContext) -> None:
             req.admin_id = message.from_user.id
             req.reviewed_at = datetime.now(timezone.utc)
             await session.commit()
+            await invalidate_user_cache(req.user_id)
 
     await message.answer(f" <b>تمت الموافقة على {_fmt(new_amount)} وإضافتها للرصيد.</b>", parse_mode="HTML")
 
