@@ -13,7 +13,12 @@ from sqlalchemy import select
 
 from bot.database.main import Database
 from bot.database.models.main import TopUpRequest, User
-from bot.handlers.user.top_up import _get_admin_ids, _fmt
+from bot.handlers.user.balance_and_payment import _get_admin_ids_topup as _get_admin_ids
+
+
+def _fmt(value) -> str:
+    from decimal import Decimal
+    return f"{Decimal(str(value)).quantize(Decimal('0.01'))}" + chr(36)
 
 logger = logging.getLogger(__name__)
 router = Router()
