@@ -834,10 +834,15 @@ async def pay_manual_receipt(message: Message, state: FSMContext):
 
     for admin_id in _get_admin_ids_topup():
         try:
+            # إرسال الصورة أولاً (بدون أزرار)
             await message.bot.send_photo(
                 chat_id=admin_id,
                 photo=file_id,
-                caption=summary,
+            )
+            # إرسال النص مع الأزرار (هذا هو الإشعار الذي سيرن بقوة)
+            await message.bot.send_message(
+                chat_id=admin_id,
+                text=summary,
                 parse_mode="HTML",
                 reply_markup=_admin_topup_keyboard(req_id),
             )
