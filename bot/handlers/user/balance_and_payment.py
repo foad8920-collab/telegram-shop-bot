@@ -664,3 +664,192 @@ async def buy_item_callback_handler(call: CallbackQuery, state: FSMContext):
             localize("errors.something_wrong"),
             show_alert=True
         )
+
+
+# ============================================================
+#   التحويل اليدوي (صورة السند)  شحن الرصيد
+# ============================================================
+from bot.database.models.main import TopUpRequest, PaymentMethod, User
+from bot.database.main import Database
+from sqlalchemy import select
+import logging as _topup_logging
+
+_topup_logger = _topup_logging.getLogger(__name__)
+
+
+def _get_admin_ids_topup() -> list[int]:
+    """جلب معرفات المشرفين (نفس أسلوب local_buy_receipts)."""
+    result: list[int] = []
+    for attr in ("ADMINS", "ADMIN_ID", "OWNER_ID"):
+        raw = getattr(EnvKeys, attr, None)
+        if not raw:
+            continue
+        if isinstance(raw, (list, tuple, set)):
+            for x in raw:
+                try:
+                    result.append(int(x))
+                except (ValueError, TypeError):
+                    pass
+        else:
+            for p in str(raw).split(","):
+                try:
+                    result.append(int(p.strip()))
+                except (ValueError, TypeError):
+                    pass
+    return list(dict.fromkeys(result))
+
+
+def _admin_topup_keyboard(req_id: int):
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=" تأكيد", callback_data=f"topup_approve:{req_id}", style="success"),
+            InlineKeyboardButton(text=" تعديل", callback_data=f"topup_edit:{req_id}", style="primary"),
+            InlineKeyboardButton(text=" رفض", callback_data=f"topup_reject:{req_id}", style="danger"),
+        ],
+    ])
+
+
+@router.callback_query(BalanceStates.waiting_payment, F.data == "pay_manual")
+async def pay_manual_start(call: CallbackQuery, state: FSMContext):
+    """عرض طرق الدفع النشطة من قاعدة البيانات."""
+    data = await state.get_data()
+    amount = data.get("amount")
+    if not amount:
+        await call.answer(localize("payments.session_expired"), show_alert=True)
+        await state.clear()
+        return
+
+    # جلب طرق الدفع النشطة من قاعدة البيانات
+    async with Database().session() as session:
+        methods = (await session.execute(
+            select(PaymentMethod).where(PaymentMethod.is_active == True)
+        )).scalars().all()
+
+    if not methods:
+        await call.message.edit_text(
+            " لا توجد طرق دفع متاحة حالياً. يرجى التواصل مع الدعم.",
+            parse_mode="HTML"
+        )
+        await state.clear()
+        return
+
+    # بناء أزرار لطرق الدفع
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    rows = []
+    for m in methods:
+        rows.append([InlineKeyboardButton(
+            text=f" {m.name}",
+            callback_data=f"topup_method:{m.id}",
+            style=m.style or "primary"
+        )])
+    rows.append([InlineKeyboardButton(text=" رجوع", callback_data="replenish_balance", style="primary")])
+
+    await call.message.edit_text(
+        f" <b>اختر طريقة الدفع</b>\n\n"
+        f" المبلغ: <b>{amount}$</b>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+    )
+    await state.set_state(BalanceStates.waiting_receipt)
+
+
+@router.callback_query(BalanceStates.waiting_receipt, F.data.startswith("topup_method:"))
+async def pay_manual_show_account(call: CallbackQuery, state: FSMContext):
+    """عرض رقم الحساب لطريقة الدفع المختارة."""
+    await call.answer()
+    method_id = int(call.data.split(":")[1])
+    data = await state.get_data()
+    amount = data.get("amount")
+    if not amount:
+        await call.answer(localize("payments.session_expired"), show_alert=True)
+        await state.clear()
+        return
+
+    async with Database().session() as session:
+        pm = (await session.execute(
+            select(PaymentMethod).where(PaymentMethod.id == method_id)
+        )).scalar_one_or_none()
+        if not pm:
+            await call.answer(" طريقة الدفع غير موجودة.", show_alert=True)
+            return
+
+    await state.update_data(payment_method_id=method_id, payment_method_name=pm.name)
+
+    await call.message.edit_text(
+        f" <b>{pm.name}</b>\n\n"
+        f" المبلغ: <b>{amount}$</b>\n\n"
+        f" <b>رقم الحساب / التعليمات:</b>\n"
+        f"<code>{pm.account_info}</code>\n\n"
+        f" قم بتحويل المبلغ، ثم أرسل <b>صورة سند الحوالة</b> هنا.",
+        parse_mode="HTML"
+    )
+    await state.set_state(BalanceStates.waiting_receipt)
+
+
+@router.message(BalanceStates.waiting_receipt, F.photo)
+async def pay_manual_receipt(message: Message, state: FSMContext):
+    """استقبال صورة السند وإرسالها للمشرف."""
+    data = await state.get_data()
+    amount = data.get("amount")
+    if not amount:
+        await message.answer(" انتهت الجلسة. ابدأ من جديد.")
+        await state.clear()
+        return
+
+    file_id = message.photo[-1].file_id
+    user_id = message.from_user.id
+    username = message.from_user.full_name or message.from_user.username or f"User{user_id}"
+    pm_id = data.get("payment_method_id")
+    pm_name = data.get("payment_method_name", "غير محدد")
+
+    try:
+        async with Database().session() as session:
+            req = TopUpRequest(
+                user_id=user_id,
+                payment_method_id=pm_id,
+                amount_requested=Decimal(str(amount)),
+                receipt_photo_id=file_id,
+                status="pending",
+            )
+            session.add(req)
+            await session.commit()
+            await session.refresh(req)
+            req_id = req.id
+    except Exception as e:
+        _topup_logger.exception("TopUp create failed: %s", e)
+        await message.answer(" حدث خطأ. حاول لاحقاً.")
+        await state.clear()
+        return
+
+    summary = (
+        f" <b>طلب شحن جديد</b>\n\n"
+        f" الطلب: <code>#{req_id}</code>\n"
+        f" المستخدم: <a href=\"tg://user?id={user_id}\">{username}</a>\n"
+        f" <code>{user_id}</code>\n"
+        f" المبلغ المطلوب: <b>{amount}$</b>\n"
+        f" طريقة الدفع: <b>{pm_name}</b>\n\n"
+        f" راجع السند واختر الإجراء:"
+    )
+
+    for admin_id in _get_admin_ids_topup():
+        try:
+            await message.bot.send_photo(
+                chat_id=admin_id,
+                photo=file_id,
+                caption=summary,
+                parse_mode="HTML",
+                reply_markup=_admin_topup_keyboard(req_id),
+            )
+        except Exception as e:
+            _topup_logger.warning("Admin %s notify failed: %s", admin_id, e)
+
+    await message.answer(
+        f" <b>تم إرسال طلبك بنجاح!</b>\n\n"
+        f" رقم الطلب: <code>#{req_id}</code>\n"
+        f" المبلغ: <b>{amount}$</b>\n\n"
+        f" <i>سيتم مراجعة الحوالة والتأكيد خلال دقائق.</i>\n"
+        f" <i>ستصلك رسالة عند الموافقة.</i>",
+        parse_mode="HTML"
+    )
+    await state.clear()

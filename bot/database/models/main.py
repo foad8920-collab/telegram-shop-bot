@@ -1107,3 +1107,38 @@ class UserActivity(Database.BASE):
     def __str__(self):
         return f"{self.user_id}: {self.action_type} -> {self.target or '-'}"
 
+
+class TopUpRequest(Database.BASE):
+    """طلب شحن رصيد  يراجعه المشرف (تأكيد/تعديل/رفض)."""
+    __tablename__ = "top_up_requests"
+    
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey('users.telegram_id', ondelete="CASCADE"), 
+        nullable=False, index=True
+    )
+    payment_method_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey('payment_methods.id', ondelete="SET NULL"), 
+        nullable=True
+    )
+    amount_requested: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    amount_received: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+    receipt_photo_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", index=True)
+    admin_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    admin_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    reviewed_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    
+    user: Mapped["User"] = relationship("User", lazy='raise')
+    
+    __table_args__ = (
+        Index('ix_topup_status_created', 'status', 'created_at'),
+    )
+    
+    def __str__(self):
+        return f"#{self.id} - {self.amount_requested}$ ({self.status})"

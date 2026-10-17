@@ -437,20 +437,18 @@ def payment_menu(pay_url: str) -> InlineKeyboardMarkup:
 
 def get_payment_choice() -> InlineKeyboardMarkup:
     """
-    Select a payment method in a 2-column grid.
+    Select a payment method.
+     حالياً نعرض فقط "التحويل اليدوي" (اليمن).
     """
     kb = InlineKeyboardBuilder()
+    #  التحويل اليدوي (صورة السند)  الخيار الأساسي
     kb.row(
-        InlineKeyboardButton(text=localize("btn.pay.crypto"), callback_data="pay_cryptopay"),
-        InlineKeyboardButton(text=localize("btn.pay.stars"), callback_data="pay_stars"),
+        InlineKeyboardButton(text=" تحويل يدوي (سند)", callback_data="pay_manual"),
     )
     kb.row(
-        InlineKeyboardButton(text=localize("btn.pay.tg"), callback_data="pay_fiat"),
         InlineKeyboardButton(text=localize("btn.back"), callback_data="replenish_balance"),
     )
     return kb.as_markup()
-
-
 def question_buttons(question: str, back_data: str) -> InlineKeyboardMarkup:
     """
     Universal yes/no + Back.
