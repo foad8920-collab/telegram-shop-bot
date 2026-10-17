@@ -849,12 +849,16 @@ async def pay_manual_receipt(message: Message, state: FSMContext):
         except Exception as e:
             _topup_logger.warning("Admin %s notify failed: %s", admin_id, e)
 
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     await message.answer(
         f" <b>تم إرسال طلبك بنجاح!</b>\n\n"
         f" رقم الطلب: <code>#{req_id}</code>\n"
         f" المبلغ: <b>{amount}$</b>\n\n"
         f" <i>سيتم مراجعة الحوالة والتأكيد خلال دقائق.</i>\n"
         f" <i>ستصلك رسالة عند الموافقة.</i>",
-        parse_mode="HTML"
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=" عرض الملف الشخصي", callback_data="profile", style="primary")]
+        ])
     )
     await state.clear()

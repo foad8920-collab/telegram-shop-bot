@@ -73,6 +73,9 @@ async def approve(call: CallbackQuery) -> None:
                 " شكرًا لاستخدامك منصة اليمن الإلكترونية.",
             ]),
             parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=" عرض الملف الشخصي", callback_data="profile", style="primary")]
+            ]),
         )
     except Exception as e:
         logger.warning("User notify failed: %s", e)
@@ -173,9 +176,12 @@ async def edit_confirm(message: Message, state: FSMContext) -> None:
                 " <b>تم شحن رصيدك بنجاح!</b>",
                 "",
                 f" المبلغ: <b>{_fmt(new_amount)}</b>",
-                f" رقم الطلب: <code>#{req_id}</code>",
+                f" رقم الطلب: <code>{req_id}</code>",
             ]),
             parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=" عرض الملف الشخصي", callback_data="profile", style="primary")]
+            ]),
         )
     except Exception as e:
         logger.warning("User notify failed: %s", e)
