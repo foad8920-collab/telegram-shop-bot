@@ -1923,7 +1923,7 @@ class LocalSubscriptionCodeAdmin(ModelView, model=LocalSubscriptionCode):
     }
 
     form_columns = [
-        LocalSubscriptionCode.subscription_id,
+        "subscription_id",  # استخدم النص بدلاً من العمود
         LocalSubscriptionCode.content,
         LocalSubscriptionCode.is_used,
         LocalSubscriptionCode.used_by,
