@@ -1923,14 +1923,14 @@ class LocalSubscriptionCodeAdmin(ModelView, model=LocalSubscriptionCode):
     }
 
     form_columns = [
-        "subscription_id",  # استخدم النص بدلاً من العمود
+        "subscription",
         LocalSubscriptionCode.content,
         LocalSubscriptionCode.is_used,
         LocalSubscriptionCode.used_by,
         LocalSubscriptionCode.order_id,
     ]
 
-    form_overrides = {"subscription_id": SelectField}
+    form_overrides = {"subscription": SelectField}
 
     async def scaffold_form(self, *args, **kwargs):
         form = await super().scaffold_form(*args, **kwargs)
@@ -1939,10 +1939,11 @@ class LocalSubscriptionCodeAdmin(ModelView, model=LocalSubscriptionCode):
         from sqlalchemy import select
         async with Database().session() as session:
             subs = (await session.execute(select(LocalSubscription))).scalars().all()
-            form.subscription_id.choices = [(s.id, s.name) for s in subs]
+            if hasattr(form, 'subscription'):
+                form.subscription.choices = [(s.id, s.name) for s in subs]
         return form
 
-    form_overrides = {"subscription_id": SelectField}
+    form_overrides = {"subscription": SelectField}
 
     def subscription_name_label(model: LocalSubscriptionCode, _attr) -> str:
         sub = getattr(model, "subscription", None)
