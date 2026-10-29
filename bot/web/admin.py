@@ -837,8 +837,8 @@ class PromoCodeAdmin(AuditModelView, model=PromoCodes):
     column_sortable_list = [PromoCodes.id, PromoCodes.code, PromoCodes.created_at]
     column_default_sort = (PromoCodes.id, True)
     form_columns = [PromoCodes.code, PromoCodes.discount_type, PromoCodes.discount_value,
-                    PromoCodes.scope, PromoCodes.max_uses, PromoCodes.expires_at, PromoCodes.is_active
-    ]
+                    PromoCodes.scope, PromoCodes.max_uses, PromoCodes.expires_at, PromoCodes.is_active]
+    form_overrides = {"discount_type": SelectField, "scope": SelectField}
     form_args = {
         "discount_type": {
             "choices": [
@@ -1929,6 +1929,20 @@ class LocalSubscriptionCodeAdmin(ModelView, model=LocalSubscriptionCode):
         LocalSubscriptionCode.used_by,
         LocalSubscriptionCode.order_id,
     ]
+
+    form_overrides = {"subscription_id": SelectField}
+
+    async def scaffold_form(self, *args, **kwargs):
+        form = await super().scaffold_form(*args, **kwargs)
+        from bot.database.main import Database
+        from bot.database.models.main import LocalSubscription
+        from sqlalchemy import select
+        async with Database().session() as session:
+            subs = (await session.execute(select(LocalSubscription))).scalars().all()
+            form.subscription_id.choices = [(s.id, s.name) for s in subs]
+        return form
+
+    form_overrides = {"subscription_id": SelectField}
 
     def subscription_name_label(model: LocalSubscriptionCode, _attr) -> str:
         sub = getattr(model, "subscription", None)
