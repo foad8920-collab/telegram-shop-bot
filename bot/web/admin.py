@@ -836,18 +836,6 @@ class PromoCodeAdmin(AuditModelView, model=PromoCodes):
     column_searchable_list = [PromoCodes.code]
     column_sortable_list = [PromoCodes.id, PromoCodes.code, PromoCodes.created_at]
     column_default_sort = (PromoCodes.id, True)
-    form_args = {
-        "subscription_id": {
-            "choices": [
-                (1, "حسابات Gmail"),
-                (5, "Gemini Pro 3 Months"),
-                (6, "Gemini Pro 1 Month"),
-                (11, "Gemini Pro 18 Months"),
-                (13, "حسابات Gmail جاهزة"),
-            ],
-            "description": "اختر الباقة التي ينتمي إليها هذا الكود."
-        }
-    }
     form_columns = [PromoCodes.code, PromoCodes.discount_type, PromoCodes.discount_value,
                     PromoCodes.scope, PromoCodes.max_uses, PromoCodes.expires_at, PromoCodes.is_active]
     form_overrides = {"discount_type": SelectField, "scope": SelectField}
@@ -1554,18 +1542,6 @@ class SupplierView(ModelView, model=Supplier):
 
     page_size = 25
 
-    form_args = {
-        "subscription_id": {
-            "choices": [
-                (1, "حسابات Gmail"),
-                (5, "Gemini Pro 3 Months"),
-                (6, "Gemini Pro 1 Month"),
-                (11, "Gemini Pro 18 Months"),
-                (13, "حسابات Gmail جاهزة"),
-            ],
-            "description": "اختر الباقة التي ينتمي إليها هذا الكود."
-        }
-    }
     form_columns = [
         Supplier.name,
         Supplier.display_name,
@@ -1737,18 +1713,6 @@ class LocalSubscriptionView(ModelView, model=LocalSubscription):
         "is_active": "مفعّل",
     }
 
-    form_args = {
-        "subscription_id": {
-            "choices": [
-                (1, "حسابات Gmail"),
-                (5, "Gemini Pro 3 Months"),
-                (6, "Gemini Pro 1 Month"),
-                (11, "Gemini Pro 18 Months"),
-                (13, "حسابات Gmail جاهزة"),
-            ],
-            "description": "اختر الباقة التي ينتمي إليها هذا الكود."
-        }
-    }
     form_columns = [
         LocalSubscription.name,
         LocalSubscription.description,
@@ -1892,7 +1856,7 @@ class LocalSubscriptionOrderAdmin(ModelView, model=LocalSubscriptionOrder):
         )
 
     def subscription_name_label(model: LocalSubscriptionOrder, _attr) -> str:
-        sub = getattr(model, "subscription_id", None)
+        sub = getattr(model, "subscription", None)
         if sub is not None:
             return str(sub.name or f"#{model.subscription_id}")
         return f"#{model.subscription_id}"
@@ -1958,20 +1922,8 @@ class LocalSubscriptionCodeAdmin(ModelView, model=LocalSubscriptionCode):
         "created_at": "تاريخ الإضافة",
     }
 
-    form_args = {
-        "subscription_id": {
-            "choices": [
-                (1, "حسابات Gmail"),
-                (5, "Gemini Pro 3 Months"),
-                (6, "Gemini Pro 1 Month"),
-                (11, "Gemini Pro 18 Months"),
-                (13, "حسابات Gmail جاهزة"),
-            ],
-            "description": "اختر الباقة التي ينتمي إليها هذا الكود."
-        }
-    }
     form_columns = [
-        "subscription_id",
+        "subscription_id",  # استخدم النص بدلاً من العمود
         LocalSubscriptionCode.content,
         LocalSubscriptionCode.is_used,
         LocalSubscriptionCode.used_by,
@@ -1987,12 +1939,13 @@ class LocalSubscriptionCodeAdmin(ModelView, model=LocalSubscriptionCode):
         from sqlalchemy import select
         async with Database().session() as session:
             subs = (await session.execute(select(LocalSubscription))).scalars().all()
-            if hasattr(form, 'subscription_id'):
-                form.subscription_id.choices = [(s.id, s.name) for s in subs]
+            form.subscription_id.choices = [(s.id, s.name) for s in subs]
         return form
 
+    form_overrides = {"subscription_id": SelectField}
+
     def subscription_name_label(model: LocalSubscriptionCode, _attr) -> str:
-        sub = getattr(model, "subscription_id", None)
+        sub = getattr(model, "subscription", None)
         if sub is not None:
             return str(sub.name or f"#{model.subscription_id}")
         return f"#{model.subscription_id}"
