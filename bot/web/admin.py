@@ -1942,6 +1942,8 @@ class LocalSubscriptionCodeAdmin(ModelView, model=LocalSubscriptionCode):
             form.subscription_id.choices = [(s.id, s.name) for s in subs]
         return form
 
+    form_overrides = {"subscription_id": SelectField}
+
     def subscription_name_label(model: LocalSubscriptionCode, _attr) -> str:
         sub = getattr(model, "subscription", None)
         if sub is not None:
