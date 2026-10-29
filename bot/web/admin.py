@@ -1856,7 +1856,7 @@ class LocalSubscriptionOrderAdmin(ModelView, model=LocalSubscriptionOrder):
         )
 
     def subscription_name_label(model: LocalSubscriptionOrder, _attr) -> str:
-        sub = getattr(model, "subscription", None)
+        sub = getattr(model, "subscription_id", None)
         if sub is not None:
             return str(sub.name or f"#{model.subscription_id}")
         return f"#{model.subscription_id}"
@@ -1923,30 +1923,15 @@ class LocalSubscriptionCodeAdmin(ModelView, model=LocalSubscriptionCode):
     }
 
     form_columns = [
-        "subscription",
+        "subscription_id",
         LocalSubscriptionCode.content,
         LocalSubscriptionCode.is_used,
         LocalSubscriptionCode.used_by,
         LocalSubscriptionCode.order_id,
     ]
 
-    form_overrides = {"subscription": SelectField}
-
-    async def scaffold_form(self, *args, **kwargs):
-        form = await super().scaffold_form(*args, **kwargs)
-        from bot.database.main import Database
-        from bot.database.models.main import LocalSubscription
-        from sqlalchemy import select
-        async with Database().session() as session:
-            subs = (await session.execute(select(LocalSubscription))).scalars().all()
-            if hasattr(form, 'subscription'):
-                form.subscription.choices = [(s.id, s.name) for s in subs]
-        return form
-
-    form_overrides = {"subscription": SelectField}
-
     def subscription_name_label(model: LocalSubscriptionCode, _attr) -> str:
-        sub = getattr(model, "subscription", None)
+        sub = getattr(model, "subscription_id", None)
         if sub is not None:
             return str(sub.name or f"#{model.subscription_id}")
         return f"#{model.subscription_id}"
