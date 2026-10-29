@@ -1939,7 +1939,8 @@ class LocalSubscriptionCodeAdmin(ModelView, model=LocalSubscriptionCode):
         from sqlalchemy import select
         async with Database().session() as session:
             subs = (await session.execute(select(LocalSubscription))).scalars().all()
-            form.subscription_id.choices = [(s.id, s.name) for s in subs]
+            if hasattr(form, 'subscription'):
+                form.subscription.choices = [(s.id, s.name) for s in subs]
         return form
 
     form_overrides = {"subscription_id": SelectField}
