@@ -1923,12 +1923,44 @@ class LocalSubscriptionCodeAdmin(ModelView, model=LocalSubscriptionCode):
     }
 
     form_columns = [
-        "subscription_id",  # استخدم النص بدلاً من العمود
+        LocalSubscriptionCode.subscription_id,
         LocalSubscriptionCode.content,
         LocalSubscriptionCode.is_used,
         LocalSubscriptionCode.used_by,
         LocalSubscriptionCode.order_id,
     ]
+
+    async def scaffold_form(self, *args, **kwargs):
+        Form = await super().scaffold_form(*args, **kwargs)
+
+        async with self.session_maker() as s:
+            subs = (await s.execute(
+                sa_select(LocalSubscription.id, LocalSubscription.name).order_by(LocalSubscription.name)
+            )).all()
+
+        choices = [("", "- اختر الاشتراك -")] + [
+            (str(sid), name or f"#{sid}") for sid, name in subs
+        ]
+
+        def _coerce(v):
+            return int(v) if v not in (None, "", "None") else None
+
+        class CodeFormWithSubscription(Form):
+            subscription_id = SelectField(
+                "الاشتراك", choices=choices, coerce=_coerce,
+                validators=[WtfOptional()],
+            )
+
+        return CodeFormWithSubscription
+
+    async def on_model_change(self, data: dict, model: Any, is_created: bool, request: Request) -> None:
+        sid = data.get("subscription_id")
+        if sid in (None, "", "None"):
+            raise ValueError("اختر الاشتراك أولاً، هذا الحقل إلزامي.")
+        try:
+            data["subscription_id"] = int(sid)
+        except (TypeError, ValueError):
+            raise ValueError("معرّف الاشتراك غير صالح.")
 
     def subscription_name_label(model: LocalSubscriptionCode, _attr) -> str:
         sub = getattr(model, "subscription", None)
