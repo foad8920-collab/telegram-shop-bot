@@ -9,6 +9,7 @@ Steps:
 """
 from __future__ import annotations
 
+import html
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -388,7 +389,20 @@ async def payment_balance_handler(call: CallbackQuery, state: FSMContext) -> Non
         lines.append(" <b>الأكواد / المفاتيح الخاصة بك:</b>")
         lines.append("")
         for idx, c in enumerate(codes_content, 1):
-            lines.append(f"<b>{idx}.</b> <code>{c}</code>")
+            lines.append(f"<b>{idx}.</b>")
+            for _line in str(c).splitlines():
+                _line = _line.strip()
+                if not _line:
+                    continue
+                if ": " in _line:
+                    _label, _value = _line.split(": ", 1)
+                    _value = _value.strip()
+                    if _value:
+                        lines.append(f"{html.escape(_label.strip(), quote=False)}: <code>{html.escape(_value, quote=False)}</code>")
+                    else:
+                        lines.append(f"<code>{html.escape(_line, quote=False)}</code>")
+                else:
+                    lines.append(f"<code>{html.escape(_line, quote=False)}</code>")
         lines.append("")
         lines.append(" <i>احتفظ بهذه الأكواد  لن تُعرض مرة أخرى.</i>")
         text = NL.join(lines)
