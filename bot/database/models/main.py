@@ -791,6 +791,7 @@ class SupplierProduct(Database.BASE):
 
     is_available: Mapped[bool] = mapped_column(Boolean, default=True)
     is_visible: Mapped[bool] = mapped_column(Boolean, default=True)
+    show_in_local: Mapped[bool] = mapped_column(Boolean, default=False)
 
     raw_data: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     last_synced_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

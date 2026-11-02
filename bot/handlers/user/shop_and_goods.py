@@ -4,6 +4,7 @@ logger = logging.getLogger(__name__)
 
 from bot.database.main import Database
 from bot.database.models.main import Supplier, LocalSubscription
+from bot.database.models.main import SupplierProduct
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
@@ -611,7 +612,7 @@ async def pandora_buy_soon_handler(call: CallbackQuery):
 #  الاشتراكات المحلية (local_subscriptions)
 # ============================================================
 
-def _local_subscriptions_keyboard(items: list) -> InlineKeyboardMarkup:
+def _local_subscriptions_keyboard(items: list, supplier_items: list | None = None) -> InlineKeyboardMarkup:
     """Build the inline keyboard for local subscriptions with stock-aware styles."""
     rows: list[list[InlineKeyboardButton]] = []
     for sub in items:
@@ -628,6 +629,19 @@ def _local_subscriptions_keyboard(items: list) -> InlineKeyboardMarkup:
             text = f" {sub.name}  نفدت الكمية"
             cb = "local_sub_out_of_stock"
             style = "danger"
+        rows.append([InlineKeyboardButton(text=text, callback_data=cb, style=style)])
+    for prod in (supplier_items or []):
+        stock = int(prod.stock or 0)
+        available = prod.is_available and (prod.is_unlimited or stock > 0)
+        price_text = f"{prod.selling_price}$" if prod.selling_price is not None else "?"
+        stock_text = "غير محدود" if prod.is_unlimited else str(stock)
+        if available:
+            text = f" {prod.name}  {price_text} (متوفر: {stock_text})"
+            style = "success"
+        else:
+            text = f" {prod.name}  نفدت الكمية"
+            style = "danger"
+        cb = f"sv_prod:{prod.supplier_id}:{prod.id}"
         rows.append([InlineKeyboardButton(text=text, callback_data=cb, style=style)])
     rows.append([InlineKeyboardButton(text=" البحث في الاشتراكات المحلية", callback_data="local_search", style="primary")])
     rows.append([InlineKeyboardButton(text=" رجوع", callback_data="back_to_menu", style="primary")])
@@ -651,6 +665,12 @@ async def shop_local_handler(call: CallbackQuery, state: FSMContext):
                 .order_by(LocalSubscription.id)
             )
             items = result.scalars().all()
+            sup_result = await session.execute(
+                select(SupplierProduct)
+                .where(SupplierProduct.show_in_local == True, SupplierProduct.is_visible == True)
+                .order_by(SupplierProduct.id)
+            )
+            supplier_items = sup_result.scalars().all()
     except Exception as e:
         logger.exception("Failed to load local subscriptions: %s", e)
         await call.message.edit_text(
@@ -661,7 +681,7 @@ async def shop_local_handler(call: CallbackQuery, state: FSMContext):
         )
         return
 
-    if not items:
+    if not items and not supplier_items:
         await call.message.edit_text(
             " لا توجد اشتراكات محلية متاحة حاليًا.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
@@ -674,7 +694,7 @@ async def shop_local_handler(call: CallbackQuery, state: FSMContext):
         " <b>الاشتراكات المحلية المتوفرة:</b>\n"
         "اختر الاشتراك الذي تريد شراءه:",
         parse_mode="HTML",
-        reply_markup=_local_subscriptions_keyboard(items)
+        reply_markup=_local_subscriptions_keyboard(items, supplier_items)
     )
 
 

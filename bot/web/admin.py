@@ -1415,6 +1415,13 @@ class SupplierSyncLogAdmin(ModelView, model=SupplierSyncLog):
         return f"SyncLog#{self.id}"
 
 
+def _transfer_link(model, attribute):
+    from markupsafe import Markup
+    if getattr(model, "show_in_local", False):
+        return Markup(f'<a href="/admin/supplier-product-toggle/{model.id}">إرجاع إلى الموردين</a>')
+    return Markup(f'<a href="/admin/supplier-product-toggle/{model.id}">نقل إلى المحلية</a>')
+
+
 class SupplierProductAdmin(ModelView, model=SupplierProduct):
     """Products fetched from external suppliers."""
     name = "منتجات الموردين"
@@ -1432,6 +1439,7 @@ class SupplierProductAdmin(ModelView, model=SupplierProduct):
         SupplierProduct.manual_price,
         SupplierProduct.stock,
         SupplierProduct.is_visible,
+        SupplierProduct.show_in_local,
         SupplierProduct.is_available,
         SupplierProduct.last_synced_at,
     ]
@@ -1452,6 +1460,7 @@ class SupplierProductAdmin(ModelView, model=SupplierProduct):
         SupplierProduct.category,
         SupplierProduct.is_visible,
         SupplierProduct.is_available,
+        SupplierProduct.show_in_local,
     ]
     column_labels = {
         "supplier_id": "المورد",
@@ -1464,6 +1473,7 @@ class SupplierProductAdmin(ModelView, model=SupplierProduct):
         "fixed_profit": "ربح ثابت",
         "stock": "المخزون",
         "is_visible": "ظاهر",
+        "show_in_local": "في المحلية",
         "is_available": "متوفر",
         "last_synced_at": "آخر مزامنة",
     }
@@ -1475,6 +1485,7 @@ class SupplierProductAdmin(ModelView, model=SupplierProduct):
 
     column_formatters = {
         "last_synced_at": lambda m, a: fmt_dt_smart(getattr(m, "last_synced_at", None)),
+        "show_in_local": _transfer_link,
     }
 
 

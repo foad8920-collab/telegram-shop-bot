@@ -66,7 +66,7 @@ async def _build_categories_kb(
             select(sa_func.count(sa_func.distinct(SupplierProduct.category)))
             .where(
                 SupplierProduct.supplier_id == supplier_id,
-                SupplierProduct.is_visible == True,
+                SupplierProduct.is_visible == True, SupplierProduct.show_in_local == False,
                 SupplierProduct.category.isnot(None),
                 SupplierProduct.category != "",
             )
@@ -77,7 +77,7 @@ async def _build_categories_kb(
             select(sa_func.count(SupplierProduct.id))
             .where(
                 SupplierProduct.supplier_id == supplier_id,
-                SupplierProduct.is_visible == True,
+                SupplierProduct.is_visible == True, SupplierProduct.show_in_local == False,
                 sa_or(
                     SupplierProduct.category.is_(None),
                     SupplierProduct.category == "",
@@ -110,7 +110,7 @@ async def _build_categories_kb(
                 )
                 .where(
                     SupplierProduct.supplier_id == supplier_id,
-                    SupplierProduct.is_visible == True,
+                    SupplierProduct.is_visible == True, SupplierProduct.show_in_local == False,
                     SupplierProduct.category.isnot(None),
                     SupplierProduct.category != "",
                 )
@@ -144,7 +144,7 @@ async def _build_categories_kb(
             select(SupplierProduct)
             .where(
                 SupplierProduct.supplier_id == supplier_id,
-                SupplierProduct.is_visible == True,
+                SupplierProduct.is_visible == True, SupplierProduct.show_in_local == False,
                 sa_or(
                     SupplierProduct.category.is_(None),
                     SupplierProduct.category == "",
@@ -364,7 +364,7 @@ async def _build_products_kb(supplier_id: int, category: str, page: int) -> tupl
             .where(
                 SupplierProduct.supplier_id == supplier_id,
                 SupplierProduct.category == category,
-                SupplierProduct.is_visible == True,
+                SupplierProduct.is_visible == True, SupplierProduct.show_in_local == False,
             )
             .order_by(SupplierProduct.is_available.desc(), SupplierProduct.selling_price.asc())
         )
@@ -642,7 +642,7 @@ async def supplier_search_message_handler(message: Message, state: FSMContext) -
             select(SupplierProduct)
             .where(
                 SupplierProduct.supplier_id == supplier_id,
-                SupplierProduct.is_visible == True,
+                SupplierProduct.is_visible == True, SupplierProduct.show_in_local == False,
                 sa_func.lower(SupplierProduct.name).like(f"%{query.lower()}%"),
             )
             .order_by(

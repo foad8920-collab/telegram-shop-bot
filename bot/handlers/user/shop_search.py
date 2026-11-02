@@ -147,7 +147,7 @@ async def shop_search_query_handler(message: Message, state: FSMContext) -> None
         supplier_result = await session.execute(
             select(SupplierProduct)
             .where(
-                SupplierProduct.is_visible == True,
+                SupplierProduct.is_visible == True, SupplierProduct.show_in_local == False,
                 sa_func.lower(SupplierProduct.name).like(f"%{query_lower}%"),
                 SupplierProduct.supplier_id.in_([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
             )
@@ -358,7 +358,7 @@ async def _search_all(message: Message, query: str, query_lower: str) -> None:
         supplier_result = await session.execute(
             select(SupplierProduct)
             .where(
-                SupplierProduct.is_visible == True,
+                SupplierProduct.is_visible == True, SupplierProduct.show_in_local == False,
                 sa_func.lower(SupplierProduct.name).like(f"%{query_lower}%"),
             )
             .order_by(

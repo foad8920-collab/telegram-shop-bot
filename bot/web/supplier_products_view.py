@@ -7,6 +7,7 @@ from typing import Optional
 
 from sqladmin import BaseView, expose
 from starlette.requests import Request
+from starlette.responses import RedirectResponse
 from sqlalchemy import select, func as sa_func, desc
 
 from bot.database.main import Database
@@ -147,3 +148,16 @@ class SupplierProductsBrowserView(BaseView):
             "supplier_products_browser.html",
             context,
         )
+
+    @expose("/supplier-product-toggle/{product_id}", methods=["GET"])
+    async def toggle_show_in_local(self, request: Request):
+        try:
+            product_id = int(request.path_params.get("product_id") or 0)
+        except (ValueError, TypeError):
+            return RedirectResponse(url="/admin/supplier-product/list", status_code=303)
+        async with Database().session() as session:
+            prod = await session.get(SupplierProduct, product_id)
+            if prod is not None:
+                prod.show_in_local = not bool(prod.show_in_local)
+                await session.commit()
+        return RedirectResponse(url="/admin/supplier-product/list", status_code=303)
