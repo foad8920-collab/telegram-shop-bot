@@ -533,8 +533,10 @@ async def supplier_product_detail_handler(call: CallbackQuery, state: FSMContext
 
     text = NL.join(lines)
 
-    # Back destination: category (if exists) or supplier main page
-    if prod.category and prod.category.strip():
+    # Back destination: local list if transferred, else supplier category/main
+    if getattr(prod, "show_in_local", False):
+        back_cb = "shop_local"
+    elif prod.category and prod.category.strip():
         back_cb = f"sv_cat:{supplier_id}:{prod.category}"
     else:
         back_cb = f"shop_supplier_{supplier_id}"
