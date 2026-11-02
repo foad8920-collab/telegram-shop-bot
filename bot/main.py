@@ -125,10 +125,12 @@ async def _start_admin_server(bot: Bot):
 
     # The bot goes in so panel edits can reach users (e.g. restock notifications).
     admin_app = create_admin_app(bot)
+    import os as _os
+    _admin_port = int(_os.getenv("PORT", EnvKeys.ADMIN_PORT))
     config = uvicorn.Config(
         admin_app,
         host=EnvKeys.ADMIN_HOST,
-        port=EnvKeys.ADMIN_PORT,
+        port=_admin_port,
         log_level="warning",
     )
     server = uvicorn.Server(config)
@@ -173,7 +175,7 @@ async def _startup(dp: Dispatcher, bot: Bot, ctx: AppContext, storage) -> None:
 
     ctx.admin_server, ctx.admin_server_task = await _start_admin_server(bot)
 
-    logging.info(f"Recovery and admin panel initialized on {EnvKeys.ADMIN_HOST}:{EnvKeys.ADMIN_PORT}")
+    logging.info(f"Recovery and admin panel initialized on {EnvKeys.ADMIN_HOST}:{ctx.admin_server.config.port}")
 
 
     # Start supplier auto-sync scheduler
