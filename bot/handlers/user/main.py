@@ -1,4 +1,4 @@
-from aiogram import Router, F
+﻿from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.enums.chat_type import ChatType
 from aiogram.fsm.context import FSMContext
@@ -186,6 +186,25 @@ async def _is_subscribed(bot, channel_username: str, user_id: int) -> bool | Non
         logger.warning(f"Channel subscription check failed for user {user_id}: {e}")
         return None
     return await check_sub_channel(chat_member)
+
+
+@router.message(F.text == "/test_updates")
+async def test_updates_channel(message: Message):
+    """Owner-only test post to the updates channel. Not for customers."""
+    if message.chat.type != ChatType.PRIVATE:
+        return
+    if message.from_user.id != EnvKeys.OWNER_ID:
+        return
+    from bot.misc.services.updates_channel import send_update as _send_update
+    ok = await _send_update(
+        message.bot,
+        "Test: updates channel is connected. Product notifications will appear here."
+    )
+    await message.answer(
+        "Test post sent to the updates channel."
+        if ok
+        else "Test post failed. Check the bot is admin in the channel and UPDATES_CHANNEL_URL is set in Render."
+    )
 
 
 @router.message(F.text.startswith('/start'))
