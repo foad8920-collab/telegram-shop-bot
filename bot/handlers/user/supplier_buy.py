@@ -264,6 +264,8 @@ async def supplier_buy_qty_selected(call: CallbackQuery, state: FSMContext) -> N
         "<b>اختر طريقة الدفع</b>",
         "====================",
         f"المنتج: <b>{product_name}</b>",
+        f"المورد: <b>{supplier_name}</b> (ID: {supplier_id})",
+        f"المعرّف الخارجي: <code>{product_external_id or '-'}</code>",
         f"الكمية: <b>{qty}</b>",
         f"الاجمالي: <b>{_fmt(total)}</b>",
         f"رصيدك: <b>{_fmt(balance)}</b>" + warning,
@@ -464,6 +466,8 @@ async def supplier_buy_balance(call: CallbackQuery, state: FSMContext) -> None:
             order_id = order.id
             product_name = str(product.name)
             supplier_id = product.supplier_id
+            product_external_id = str(getattr(product, "external_id", "") or "")
+            product_in_local = bool(getattr(product, "show_in_local", False))
             new_balance = user.balance
 
     except Exception as e:
@@ -482,6 +486,10 @@ async def supplier_buy_balance(call: CallbackQuery, state: FSMContext) -> None:
 
     # Notify admins
     bot: Bot = call.bot
+    if product_in_local:
+        supplier_note = "<b>ملاحظة: هذا المنتج منقول إلى الاشتراكات المحلية، لذلك لن يظهر في قسم الموردين في البوت. اشترِه من بوت المورد في تيليجرام كمستخدم عادي، ثم أرسل الاشتراك للعميل من هنا.</b>"
+    else:
+        supplier_note = "<b>اشترِ المنتج من بوت المورد في تيليجرام كمستخدم عادي، ثم أرسل الاشتراك للعميل من هنا.</b>"
     admin_text = NL.join([
         f"{supplier_icon} <b>طلب شراء جديد من {supplier_name}</b>",
         "====================",
@@ -492,12 +500,10 @@ async def supplier_buy_balance(call: CallbackQuery, state: FSMContext) -> None:
         f"الاجمالي: <b>{_fmt(total)}</b>",
         f"طريقة الدفع: <b>رصيد البوت</b>",
         "====================",
-        "<b>يجب شراء المنتج من لوحة المورد</b>",
+        supplier_note,
     ])
 
     admin_kb_rows: list[list[InlineKeyboardButton]] = []
-    if supplier_url and supplier_url.startswith("http"):
-        admin_kb_rows.append([InlineKeyboardButton(text=f"فتح {supplier_name}", url=supplier_url, style="primary")])
     admin_kb_rows.append([
         InlineKeyboardButton(
             text=chr(0x1F4E4) + " إرسال الاشتراك للعميل",
