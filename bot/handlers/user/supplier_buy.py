@@ -479,6 +479,7 @@ async def supplier_buy_balance(call: CallbackQuery, state: FSMContext) -> None:
     async with Database().session() as session:
         supplier = await session.get(Supplier, supplier_id)
         supplier_name = supplier.display_name or supplier.name if supplier else "-"
+        supplier_internal_name = supplier.name if supplier else "-"
         supplier_icon = supplier.icon_emoji if supplier else ""
         supplier_url = supplier.api_url if supplier else ""
 
@@ -494,7 +495,8 @@ async def supplier_buy_balance(call: CallbackQuery, state: FSMContext) -> None:
         f"رقم الطلب: <code>#{order_id}</code>",
         f"العميل: <code>{user_id}</code>",
         f"المنتج: <b>{product_name}</b>",
-        f"المورد: <b>{supplier_name}</b> (ID: {supplier_id})",
+        f"المورد: <b>{supplier_name}</b>",
+        f"اسم المورد الداخلي: <b>{supplier_internal_name}</b> (ID: {supplier_id})",
         f"المعرّف الخارجي: <code>{product_external_id or '-'}</code>",
         f"الكمية: <b>{qty}</b>",
         f"الاجمالي: <b>{_fmt(total)}</b>",
@@ -503,7 +505,11 @@ async def supplier_buy_balance(call: CallbackQuery, state: FSMContext) -> None:
         supplier_note,
     ])
 
+    SUPPLIER_TELEGRAM_BOTS = {1: "stackvault_bot", 2: "Pandora_Digital_bot", 6: "storeBatmanBot"}
+    supplier_telegram_bot = SUPPLIER_TELEGRAM_BOTS.get(supplier_id, "")
     admin_kb_rows: list[list[InlineKeyboardButton]] = []
+    if supplier_telegram_bot:
+        admin_kb_rows.append([InlineKeyboardButton(text=f"فتح بوت {supplier_internal_name} في تيليجرام", url=f"https://t.me/{supplier_telegram_bot}", style="primary")])
     admin_kb_rows.append([
         InlineKeyboardButton(
             text=chr(0x1F4E4) + " إرسال الاشتراك للعميل",
