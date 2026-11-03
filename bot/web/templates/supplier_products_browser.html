@@ -76,6 +76,12 @@
         <div class="card-body">
           <div class="text-muted">إجمالي المنتجات</div>
           <div class="h2 mb-0">{{ total }}</div>
+          <div class="text-muted small">يوجد وصف: {{ with_desc_count }} | بدون وصف: {{ without_desc_count }}</div>
+          <div class="small mt-1">
+            <a href="/admin/supplier-products-browser?supplier_id={{ supplier_id }}&page=1&q={{ query }}&visible={% if visible_only %}1{% else %}0{% endif %}&desc=all">الكل</a> |
+            <a href="/admin/supplier-products-browser?supplier_id={{ supplier_id }}&page=1&q={{ query }}&visible={% if visible_only %}1{% else %}0{% endif %}&desc=with">يوجد وصف فقط</a> |
+            <a href="/admin/supplier-products-browser?supplier_id={{ supplier_id }}&page=1&q={{ query }}&visible={% if visible_only %}1{% else %}0{% endif %}&desc=without">بدون وصف فقط</a>
+          </div>
         </div>
       </div>
     </div>
@@ -103,6 +109,7 @@
             <th style="width: 90px;">يدوي</th>
             <th style="width: 80px;">المخزون</th>
             <th style="width: 90px;">الحالة</th>
+            <th style="width: 280px;">الوصف</th>
           </tr>
         </thead>
         <tbody>
@@ -135,10 +142,18 @@
                 <span class="badge bg-red-lt">نفدت</span>
               {% endif %}
             </td>
+            <td>
+              {% if p.has_description %}
+                <span class="badge bg-green-lt">يوجد وصف</span>
+                <div class="text-muted small" title="{{ p.description }}">{{ p.description_short }}</div>
+              {% else %}
+                <span class="badge bg-secondary-lt">بدون وصف</span>
+              {% endif %}
+            </td>
           </tr>
           {% else %}
           <tr>
-            <td colspan="8" class="text-center text-muted py-4">
+            <td colspan="9" class="text-center text-muted py-4">
               لا توجد منتجات لعرضها.
             </td>
           </tr>
@@ -154,7 +169,7 @@
         {% if page > 1 %}
         <li class="page-item">
           <a class="page-link"
-             href="/admin/supplier-products-browser?supplier_id={{ supplier_id }}&page={{ page - 1 }}&q={{ query }}&visible={% if visible_only %}1{% else %}0{% endif %}">
+             href="/admin/supplier-products-browser?supplier_id={{ supplier_id }}&page={{ page - 1 }}&q={{ query }}&visible={% if visible_only %}1{% else %}0{% endif %}&desc={{ desc_filter }}">
             السابق
           </a>
         </li>
@@ -163,7 +178,7 @@
         {% for pn in page_range %}
         <li class="page-item {% if pn == page %}active{% endif %}">
           <a class="page-link"
-             href="/admin/supplier-products-browser?supplier_id={{ supplier_id }}&page={{ pn }}&q={{ query }}&visible={% if visible_only %}1{% else %}0{% endif %}">
+             href="/admin/supplier-products-browser?supplier_id={{ supplier_id }}&page={{ pn }}&q={{ query }}&visible={% if visible_only %}1{% else %}0{% endif %}&desc={{ desc_filter }}">
             {{ pn }}
           </a>
         </li>
@@ -172,7 +187,7 @@
         {% if page < total_pages %}
         <li class="page-item">
           <a class="page-link"
-             href="/admin/supplier-products-browser?supplier_id={{ supplier_id }}&page={{ page + 1 }}&q={{ query }}&visible={% if visible_only %}1{% else %}0{% endif %}">
+             href="/admin/supplier-products-browser?supplier_id={{ supplier_id }}&page={{ page + 1 }}&q={{ query }}&visible={% if visible_only %}1{% else %}0{% endif %}&desc={{ desc_filter }}">
             التالي
           </a>
         </li>

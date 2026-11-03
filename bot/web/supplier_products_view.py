@@ -49,6 +49,9 @@ class SupplierProductsBrowserView(BaseView):
 
         query = (request.query_params.get("q") or "").strip()
         visible_only = request.query_params.get("visible") == "1"
+        desc_filter = (request.query_params.get("desc") or "all").strip().lower()
+        if desc_filter not in ("all", "with", "without"):
+            desc_filter = "all"
 
         # --- Load suppliers list ---
         async with Database().session() as session:
@@ -66,6 +69,8 @@ class SupplierProductsBrowserView(BaseView):
         total = 0
         total_pages = 1
         current_supplier = None
+        with_desc_count = 0
+        without_desc_count = 0
 
         if supplier_id > 0:
             async with Database().session() as session:
@@ -83,6 +88,21 @@ class SupplierProductsBrowserView(BaseView):
                     select(sa_func.count(SupplierProduct.id)).where(*base_filter)
                 )
                 total = int(count_result.scalar() or 0)
+                has_desc_filter = [
+                    SupplierProduct.description.isnot(None),
+                    sa_func.trim(SupplierProduct.description) != "",
+                ]
+                with_result = await session.execute(
+                    select(sa_func.count(SupplierProduct.id)).where(*base_filter, *has_desc_filter)
+                )
+                with_desc_count = int(with_result.scalar() or 0)
+                without_desc_count = total - with_desc_count
+                if desc_filter == "with":
+                    base_filter = [*base_filter, *has_desc_filter]
+                    total = with_desc_count
+                elif desc_filter == "without":
+                    base_filter = [*base_filter, (SupplierProduct.description.is_(None) | (sa_func.trim(SupplierProduct.description) == ""))]
+                    total = without_desc_count
 
                 total_pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
                 if page > total_pages:
@@ -103,6 +123,7 @@ class SupplierProductsBrowserView(BaseView):
         for p in products:
             stock = int(p.stock or 0)
             available = p.is_available and (p.is_unlimited or stock > 0)
+            desc_text = (p.description or "").strip()
             rows.append({
                 "id": p.id,
                 "external_id": p.external_id,
@@ -114,6 +135,9 @@ class SupplierProductsBrowserView(BaseView):
                 "stock": ("" if p.is_unlimited else str(stock)),
                 "is_visible": p.is_visible,
                 "is_available": available,
+                "description": desc_text,
+                "has_description": bool(desc_text),
+                "description_short": (desc_text[:80] + "...") if len(desc_text) > 80 else desc_text,
             })
 
         # --- Build supplier dropdown options ---
@@ -141,6 +165,9 @@ class SupplierProductsBrowserView(BaseView):
             "page_range": page_range,
             "query": query,
             "visible_only": visible_only,
+            "desc_filter": desc_filter,
+            "with_desc_count": with_desc_count,
+            "without_desc_count": without_desc_count,
         }
 
         return await self.templates.TemplateResponse(
