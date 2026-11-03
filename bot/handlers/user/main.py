@@ -1,4 +1,4 @@
-﻿from aiogram import Router, F
+from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.enums.chat_type import ChatType
 from aiogram.fsm.context import FSMContext
@@ -145,13 +145,19 @@ async def _ensure_user(user_id: int, tg_lang: str | None = None) -> dict | None:
     return await check_user_cached(user_id)
 
 
+def _updates_channel_username() -> str | None:
+    """Updates channel first, old channel only as a fallback if updates is not set."""
+    from bot.misc.services.updates_channel import parse_updates_channel_username as _parse_updates
+    return _parse_updates() or _parse_channel_username()
+
+
 def _channel_chat_id(channel_username: str) -> int | str:
     """Resolve the chat id to query for the subscription check.
 
     CHANNEL_ID wins when set (private channels have no username to address), but
     a non-numeric value in the env must not take the handler down with it.
     """
-    raw = EnvKeys.CHANNEL_ID
+    raw = EnvKeys.UPDATES_CHANNEL_ID or EnvKeys.CHANNEL_ID
     if raw:
         try:
             return int(raw)
@@ -261,7 +267,7 @@ async def start(message: Message, state: FSMContext):
         # Re-read (now cached) so the menu reflects the freshly assigned role.
         role_data = await check_role_cached(user_id)
 
-    channel_username = _parse_channel_username()
+    channel_username = _updates_channel_username()
 
     # Optional subscription check. A failed check (None) does not block entry.
     if channel_username:
@@ -291,7 +297,7 @@ async def back_to_menu_callback_handler(call: CallbackQuery, state: FSMContext):
 
     role = await check_role_cached(user_id) or 0
 
-    channel_username = _parse_channel_username()
+    channel_username = _updates_channel_username()
 
     markup = await main_menu(role=role, channel=channel_username, helper=EnvKeys.HELPER_ID)
 
@@ -365,7 +371,7 @@ async def set_language_callback_handler(call: CallbackQuery, state: FSMContext):
     await call.answer(localize("language.changed"))
 
     role = await check_role_cached(user_id) or 0
-    channel_username = _parse_channel_username()
+    channel_username = _updates_channel_username()
     markup = await main_menu(role=role, channel=channel_username, helper=EnvKeys.HELPER_ID)
     await call.message.edit_text(localize("menu.title"), reply_markup=markup)
     await state.clear()
@@ -461,7 +467,7 @@ async def check_sub_to_channel(call: CallbackQuery, state: FSMContext):
     Re-check channel subscription after user clicks "Check".
     """
     user_id = call.from_user.id
-    channel_username = _parse_channel_username()
+    channel_username = _updates_channel_username()
     helper = EnvKeys.HELPER_ID
 
     if channel_username:
