@@ -1,4 +1,4 @@
-﻿import datetime
+import datetime
 from decimal import Decimal
 from typing import Optional
 
@@ -829,6 +829,23 @@ class SupplierPricingRule(Database.BASE):
 
     def __str__(self):
         return f"Pricing[{self.supplier_id}] {self.markup_percent}%"
+
+
+class BotRule(Database.BASE):
+    """Bot rules shown to users, managed from the admin panel."""
+    __tablename__ = 'bot_rules'
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    sort_order: Mapped[int] = mapped_column(BigInteger, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    def __str__(self):
+        return (self.text or "")[:50]
 
 
 class SupplierCategoryMarkup(Database.BASE):

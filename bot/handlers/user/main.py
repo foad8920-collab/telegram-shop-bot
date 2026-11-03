@@ -355,11 +355,32 @@ async def set_language_callback_handler(call: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "rules")
 async def rules_callback_handler(call: CallbackQuery, state: FSMContext):
     """
-    Show rules text if provided in ENV.
+    Show active bot rules from the database, falling back to ENV RULES.
     """
-    rules_data = EnvKeys.RULES
-    if rules_data:
-        await call.message.edit_text(rules_data, reply_markup=back("back_to_menu"))
+    from bot.database.main import Database as _DB
+    from bot.database.models.main import BotRule as _BotRule
+    from sqlalchemy import select as _select
+
+    rules_text = ""
+    try:
+        async with _DB().session() as session:
+            result = await session.execute(
+                _select(_BotRule).where(_BotRule.is_active == True).order_by(_BotRule.sort_order, _BotRule.id)
+            )
+            rules = list(result.scalars().all())
+            if rules:
+                lines = []
+                for i, r in enumerate(rules, start=1):
+                    lines.append(f"{i}. {_esc((r.text or '').strip())}")
+                rules_text = " القوانين" + NL + NL + (NL + NL).join(lines)
+    except Exception:
+        rules_text = ""
+    if not rules_text:
+        rules_text = EnvKeys.RULES
+    if rules_text:
+        if len(rules_text) > 4000:
+            rules_text = rules_text[:3990] + "..."
+        await call.message.edit_text(rules_text, reply_markup=back("back_to_menu"))
     else:
         await call.answer(localize("rules.not_set"))
     await state.clear()

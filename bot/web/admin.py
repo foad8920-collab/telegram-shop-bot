@@ -103,6 +103,7 @@ from bot.database.methods.cache_utils import safe_create_task
 from bot.misc.services.restock_notifier import notify_restock
 from bot.middleware.security import invalidate_auth_caches, flush_all_role_caches
 from bot.database.models.main import StackVaultPricingSettings, StackVaultPriceOverride
+from bot.database.models.main import BotRule
 from bot.misc.services import StackVaultClient, StackVaultAPIError
 from bot.misc.services.stackvault_pricing import prepare_catalog
 
@@ -1171,6 +1172,35 @@ class StackVaultPricingView(BaseView):
 # App Factory
 
 
+class BotRuleAdmin(ModelView, model=BotRule):
+    name = "قوانين البوت"
+    name_plural = "قوانين البوت"
+    icon = "fa-solid fa-scroll"
+
+    column_list = [
+        BotRule.id,
+        BotRule.text,
+        BotRule.sort_order,
+        BotRule.is_active,
+        BotRule.created_at,
+        BotRule.updated_at,
+    ]
+    column_sortable_list = [
+        BotRule.id,
+        BotRule.sort_order,
+    ]
+    column_labels = {
+        "text": "نص القانون",
+        "sort_order": "الترتيب",
+        "is_active": "مفعل",
+        "created_at": "أُنشئ",
+        "updated_at": "آخر تحديث",
+    }
+    column_searchable_list = [BotRule.text]
+    form_columns = ["text", "sort_order", "is_active"]
+    page_size = 50
+
+
 class SupplierPricingRuleAdmin(ModelView, model=SupplierPricingRule):
     """Pricing rules per supplier (markup percent/fixed)."""
     name = "قواعد التسعير"
@@ -2069,6 +2099,7 @@ def create_admin_app(bot: Any = None) -> Starlette:
     admin.add_view(SupplierProductAdmin)
     admin.add_view(SupplierProductsBrowserView)
     admin.add_view(SupplierPricingRuleAdmin)
+    admin.add_view(BotRuleAdmin)
     admin.add_view(SupplierCategoryMarkupAdmin)
     admin.add_view(SupplierPriceOverrideAdmin)
     admin.add_view(SupplierOrderAdmin)
