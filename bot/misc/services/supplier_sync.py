@@ -189,6 +189,7 @@ async def sync_supplier(supplier_id: int, *, manual: bool = False) -> dict:
             report["status"] = "failed"
             report["error"] = f"Supplier {supplier_id} not found"
             return report
+        is_stackvault = "stackvault" in (supplier.name or "").lower()
 
         api_url = (supplier.api_url or "").strip()
 
@@ -326,10 +327,38 @@ async def sync_supplier(supplier_id: int, *, manual: bool = False) -> dict:
                 category_fixed_profits=category_fixed_profits,
             )
 
+            # ---- StackVault description detail refresh (every 6h) ----
+            desc_synced_at_new = existing.description_synced_at if existing is not None else None
+            if is_stackvault:
+                _existing_dt = desc_synced_at_new
+                _need_detail = False
+                if existing is None:
+                    _need_detail = True
+                elif _existing_dt is None:
+                    _need_detail = True
+                else:
+                    _dt = _existing_dt
+                    if _dt.tzinfo is None:
+                        _dt = _dt.replace(tzinfo=timezone.utc)
+                    if (now - _dt).total_seconds() >= 6 * 3600:
+                        _need_detail = True
+                if _need_detail:
+                    try:
+                        from bot.misc.services.stackvault import StackVaultClient
+                        async with StackVaultClient() as _detail_client:
+                            _detail = await _detail_client.get_product_detail(ext_id)
+                        _detail_desc = _detail.get("description") or _detail.get("desc") or _detail.get("details")
+                        if _detail_desc:
+                            description = str(_detail_desc)
+                            desc_synced_at_new = now
+                    except Exception as _detail_error:
+                        logger.warning("StackVault detail fetch failed for %s: %s", ext_id, _detail_error)
             if existing is not None:
                 # Update
                 existing.name = name
-                existing.description = str(description) if description else None
+                if description:
+                    existing.description = str(description)
+                existing.description_synced_at = desc_synced_at_new
                 existing.category = category
                 existing.cost_price = cost_price
                 existing.selling_price = selling_price
@@ -358,6 +387,7 @@ async def sync_supplier(supplier_id: int, *, manual: bool = False) -> dict:
                     is_available=is_available,
                     raw_data=product,
                     last_synced_at=now,
+                    description_synced_at=desc_synced_at_new,
                 )
                 session.add(sp)
                 report["added"] += 1

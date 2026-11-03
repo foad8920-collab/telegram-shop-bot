@@ -105,6 +105,31 @@ class StackVaultClient:
 
         return [product for product in products if isinstance(product, dict)]
 
+    async def get_product_detail(self, product_id: str) -> dict[str, Any]:
+        """Fetch a single product, including its description, by external id."""
+        api_url, api_key = await self._load_credentials()
+        if not api_key:
+            raise StackVaultAPIError("STACKVAULT_API_KEY is not configured")
+        url = f"{api_url.rstrip('/')}/products/{product_id}"
+        headers = self._get_auth_headers(api_key)
+        try:
+            session = self._get_session()
+            async with session.get(url, headers=headers) as response:
+                if response.status >= 400:
+                    body = await response.text()
+                    logger.error("StackVault product detail HTTP error: status=%s url=%s response=%s", response.status, url, body)
+                response.raise_for_status()
+                payload = await response.json(content_type=None)
+        except (aiohttp.ClientError, TimeoutError, ValueError) as error:
+            logger.error("StackVault product detail request failed: %s", error, exc_info=True)
+            raise StackVaultAPIError("Unable to retrieve StackVault product detail") from error
+        if not isinstance(payload, dict) or not payload.get("ok"):
+            logger.error("StackVault returned an unsuccessful product detail payload: %r", payload)
+            raise StackVaultAPIError("StackVault returned an unsuccessful product detail response")
+        if isinstance(payload.get("product"), dict):
+            return payload["product"]
+        return payload
+
     async def create_order(
         self,
         product_id: str,
