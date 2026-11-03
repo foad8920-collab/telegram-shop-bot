@@ -122,7 +122,7 @@ class StackVaultClient:
                 payload = await response.json(content_type=None)
         except (aiohttp.ClientError, TimeoutError, ValueError) as error:
             logger.error("StackVault product detail request failed: %s", error, exc_info=True)
-            raise StackVaultAPIError("Unable to retrieve StackVault product detail") from error
+            raise StackVaultAPIError(f"Unable to retrieve StackVault product detail: {error}") from error
         if not isinstance(payload, dict) or not payload.get("ok"):
             logger.error("StackVault returned an unsuccessful product detail payload: %r", payload)
             raise StackVaultAPIError("StackVault returned an unsuccessful product detail response")

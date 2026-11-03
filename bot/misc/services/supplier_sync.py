@@ -1,6 +1,7 @@
 """Supplier sync service  fetch products from external APIs."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
@@ -249,6 +250,8 @@ async def sync_supplier(supplier_id: int, *, manual: bool = False) -> dict:
 
     # ---- Process products ----
     now = datetime.now(timezone.utc)
+    detail_fetched_count = 0
+    detail_rate_limited = False
     seen_external_ids: set[str] = set()
 
     async with Database().session() as session:
@@ -342,7 +345,7 @@ async def sync_supplier(supplier_id: int, *, manual: bool = False) -> dict:
                         _dt = _dt.replace(tzinfo=timezone.utc)
                     if (now - _dt).total_seconds() >= 6 * 3600:
                         _need_detail = True
-                if _need_detail:
+                if _need_detail and not detail_rate_limited and detail_fetched_count < 10:
                     try:
                         from bot.misc.services.stackvault import StackVaultClient
                         async with StackVaultClient() as _detail_client:
@@ -351,8 +354,13 @@ async def sync_supplier(supplier_id: int, *, manual: bool = False) -> dict:
                         if _detail_desc:
                             description = str(_detail_desc)
                             desc_synced_at_new = now
+                        detail_fetched_count += 1
+                        await asyncio.sleep(1)
                     except Exception as _detail_error:
                         logger.warning("StackVault detail fetch failed for %s: %s", ext_id, _detail_error)
+                        if "429" in str(_detail_error) or "Rate limit" in str(_detail_error):
+                            detail_rate_limited = True
+                            logger.warning("StackVault detail fetching stopped for this sync due to rate limit")
             if existing is not None:
                 # Update
                 existing.name = name
