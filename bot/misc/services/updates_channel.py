@@ -75,7 +75,7 @@ def product_updates_keyboard(supplier_id=None, product_id=None):
     else:
         url = "https://t.me/YemenSubscriptionsBot"
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text=" اشترِ الآن", url=url, style="success"))
+    kb.row(InlineKeyboardButton(text="\U0001F6D2 اشترِ الآن", url=url, style="success"))
     return kb.as_markup()
 
 
@@ -87,29 +87,46 @@ async def format_supplier_update(ev: dict) -> str:
     price_new = ev.get("price_new")
     stock_new = ev.get("stock_new")
     if kind == "new":
-        header = " <b>منتج جديد</b>"
+        header = "\U0001F195 <b>منتج جديد</b>"
     elif kind == "out":
-        header = " <b>نفد من المخزون</b>"
+        header = "\U0000274C <b>نفد من المخزون</b>"
     elif kind == "back":
-        header = " <b>عاد للمخزون</b>"
+        header = "\U00002705 <b>عاد للمخزون</b>"
     elif kind == "low_stock":
-        header = " <b>على وشك النفاذ</b>"
+        header = "\U000026A0\U0000FE0F <b>على وشك النفاذ</b>"
     else:
         price_old = ev.get("price_old")
         if price_old is not None and price_new is not None and price_new > price_old:
-            header = " <b>ارتفع السعر</b>"
+            header = "\U0001F4C8 <b>ارتفع السعر</b>"
         elif price_old is not None and price_new is not None and price_new < price_old:
-            header = " <b>انخفض السعر</b>"
+            header = "\U0001F4C9 <b>انخفض السعر</b>"
         else:
-            header = " <b>تعديل في المنتج</b>"
-    lines = [header, f" <b>{name}</b>"]
+            header = "\U0001F504 <b>تعديل في المنتج</b>"
+    lines = [header, f"\U0001F3F7\U0000FE0F <b>{name}</b>"]
+    _display = ""
+    try:
+        _sid = ev.get("supplier_id")
+        if _sid is not None:
+            from bot.database.main import Database as _DB
+            from bot.database.models.main import Supplier as _SUP
+            async with _DB().session() as _sess:
+                _sup = await _sess.get(_SUP, int(_sid))
+                if _sup is not None:
+                    _display = (_sup.display_name or _sup.name or "").strip()
+    except Exception:
+        _display = ""
+    if _display:
+        lines.append(f"\U0001F3EA المصدر: <b>{_html.escape(_display, quote=False)}</b>")
     if price_new is not None:
         try:
-            lines.append(await _fpa(price_new or 0))
+            _price_block = await _fpa(price_new or 0)
+            for _pl in _price_block.split(chr(10)):
+                if _pl.strip():
+                    lines.append(f"\U0001F4B0 {_pl.strip()}")
         except Exception:
-            lines.append(f" السعر: <b>{price_new}</b>")
+            lines.append(f"\U0001F4B0 السعر: <b>{price_new}</b>")
     if stock_new is not None:
-        lines.append(f" الكمية المتبقية: <b>{stock_new}</b>")
+        lines.append(f"\U0001F4E6 الكمية المتبقية: <b>{stock_new}</b>")
     if stock_new is not None and 0 < stock_new <= 5 and kind != "out":
-        lines.append(f" على وشك النفاذ! تبقى <b>{stock_new}</b> فقط")
+        lines.append(f"\U000026A0\U0000FE0F على وشك النفاذ! تبقى <b>{stock_new}</b> فقط")
     return chr(10).join(lines)
