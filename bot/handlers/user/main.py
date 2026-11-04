@@ -282,6 +282,9 @@ async def start(message: Message, state: FSMContext):
     _parts = (message.text or "").split(maxsplit=1)
     if len(_parts) > 1:
         _payload = _parts[1].strip()
+        if _payload.startswith("local_"):
+            if await _send_local_detail_from_start(message, _payload):
+                return
         if _payload.startswith("sv_"):
             try:
                 _sv = _payload.split("_")
@@ -608,8 +611,62 @@ async def _show_operations_page(call: CallbackQuery, state: FSMContext, user_id:
     await call.message.edit_text("\n".join(lines), reply_markup=kb.as_markup())
 
 
-
-
-
-
-
+async def _send_local_detail_from_start(message, payload: str) -> bool:
+    try:
+        _lid = int(payload.split("_", 1)[1])
+    except Exception:
+        return False
+    try:
+        from bot.database.main import Database as _LDB
+        from bot.database.models.main import LocalSubscription as _LSUB
+        from sqlalchemy import select as _lsel
+        from sqlalchemy.orm import selectinload as _lload
+        async with _LDB().session() as _lsess:
+            _lres = await _lsess.execute(_lsel(_LSUB).options(_lload(_LSUB.codes)).where(_LSUB.id == _lid))
+            _lsub = _lres.scalar_one_or_none()
+            if _lsub is None:
+                await message.answer("هذا الاشتراك لم يعد متوفرًا.")
+                return False
+            _lname_raw = _lsub.name or ""
+            _ldesc_raw = _lsub.description or "لا يوجد وصف."
+            _lprice = _lsub.price
+            _lqty = int(_lsub.sellable_quantity or 0)
+            _lactive = bool(_lsub.is_active)
+    except Exception:
+        return False
+    if not _lactive:
+        await message.answer("هذا الاشتراك لم يعد متوفرًا.")
+        return False
+    if _lqty <= 0:
+        await message.answer("نفدت الكمية من هذا الاشتراك.")
+        return False
+    import html as _lhtml
+    _lname = _lhtml.escape(_lname_raw, quote=False)
+    _ldesc = _lhtml.escape(_ldesc_raw, quote=False)
+    try:
+        from bot.database.methods.transactions import get_currency_rates as _lrates_fn, convert_price as _lconv_fn
+        _lrates = await _lrates_fn()
+        _lprices = _lconv_fn(_lprice, _lrates)
+        _lusd = f"${_lprices['usd']}"
+        _lsar = f"{_lprices['sar']} ريال سعودي"
+        _lyer = f"{_lprices['yer']} ريال يمني"
+    except Exception:
+        _lusd = f"${_lprice}"
+        _lsar = None
+        _lyer = None
+    _lprice_lines = f" السعر: <b>{_lusd}</b>" + chr(10)
+    if _lsar:
+        _lprice_lines += f" السعر: <b>{_lsar}</b>" + chr(10)
+    if _lyer:
+        _lprice_lines += f" السعر: <b>{_lyer}</b>" + chr(10)
+    _ltext = (f" <b>{_lname}</b>" + chr(10) + chr(10) + f" {_ldesc}" + chr(10) + chr(10) + _lprice_lines + f" المتوفر: <b>{_lqty}</b>" + chr(10))
+    try:
+        from aiogram.types import InlineKeyboardButton as _LKB, InlineKeyboardMarkup as _LKM
+        _lmarkup = _LKM(inline_keyboard=[
+            [_LKB(text=" شراء الآن", callback_data=f"local_buy:{_lid}", style="success")],
+            [_LKB(text=" رجوع", callback_data="shop_local", style="primary")],
+        ])
+        await message.answer(_ltext, parse_mode="HTML", reply_markup=_lmarkup)
+        return True
+    except Exception:
+        return False

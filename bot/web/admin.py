@@ -192,6 +192,7 @@ def _safe_model_repr(model: Any, max_len: int = 500) -> str:
 
 
 _notifier_bot: Any = None
+_LOCAL_OLD_STATE: dict[int, tuple] = {}
 
 
 def set_notifier_bot(bot: Any) -> None:
@@ -1838,6 +1839,97 @@ class LocalSubscriptionView(ModelView, model=LocalSubscription):
     def __str__(self):
         return self.name or ""
 
+    async def on_model_change(self, data: dict, model: Any, is_created: bool, request: Request) -> None:
+        try:
+            await super().on_model_change(data, model, is_created, request)
+        except Exception:
+            pass
+        if is_created:
+            return
+        try:
+            _mid = int(getattr(model, "id", 0) or 0)
+            if _mid <= 0:
+                return
+            from bot.database.main import Database as _ODB
+            from bot.database.models.main import LocalSubscription as _OSUB
+            from sqlalchemy import select as _osel
+            from sqlalchemy.orm import selectinload as _oload
+            async with _ODB().session() as _osess:
+                _ores = await _osess.execute(_osel(_OSUB).options(_oload(_OSUB.codes)).where(_OSUB.id == _mid))
+                _old = _ores.scalar_one_or_none()
+                if _old is not None:
+                    _LOCAL_OLD_STATE[_mid] = (_old.price, int(_old.sellable_quantity or 0), bool(_old.is_active))
+        except Exception:
+            pass
+
+    async def after_model_change(self, data: dict, model: Any, is_created: bool, request: Request) -> None:
+        await super().after_model_change(data, model, is_created, request)
+        try:
+            _lid = int(getattr(model, "id", 0) or 0)
+            if _lid <= 0:
+                return
+            from bot.database.main import Database as _NDB
+            from bot.database.models.main import LocalSubscription as _NSUB
+            from sqlalchemy import select as _nsel
+            from sqlalchemy.orm import selectinload as _nload
+            async with _NDB().session() as _nsess:
+                _nres = await _nsess.execute(_nsel(_NSUB).options(_nload(_NSUB.codes)).where(_NSUB.id == _lid))
+                _fresh = _nres.scalar_one_or_none()
+                if _fresh is None:
+                    _LOCAL_OLD_STATE.pop(_lid, None)
+                    return
+                _fname = _fresh.name or ""
+                _fprice = _fresh.price
+                _fstock = int(_fresh.sellable_quantity or 0)
+                _factive = bool(_fresh.is_active)
+            if not _factive:
+                _LOCAL_OLD_STATE.pop(_lid, None)
+                return
+            if is_created:
+                if _fstock <= 0:
+                    return
+                _kind = "new"
+                _old_price = None
+            else:
+                _old = _LOCAL_OLD_STATE.pop(_lid, None)
+                if _old is None:
+                    _kind = "update"
+                    _old_price = None
+                else:
+                    _old_price, _old_stock, _old_active = _old
+                    if _fstock <= 0 and _old_stock > 0:
+                        _kind = "out"
+                    elif _fstock > 0 and _old_stock <= 0:
+                        _kind = "back"
+                    elif _fprice != _old_price:
+                        _kind = "price"
+                    elif 0 < _fstock <= 5 and _old_stock > 5:
+                        _kind = "low_stock"
+                    elif _fstock != _old_stock or _fprice != _old_price:
+                        _kind = "update"
+                    else:
+                        return
+            from bot.misc.services.updates_channel import format_local_update as _lfmt, local_updates_keyboard as _lkb, send_update as _lsend
+            _ev = {"kind": _kind, "name": _fname, "price_new": _fprice, "price_old": _old_price, "stock_new": _fstock}
+            _text = await _lfmt(_ev)
+            _markup = _lkb(_lid)
+            if _notifier_bot is not None:
+                safe_create_task(_lsend(_notifier_bot, _text, reply_markup=_markup))
+            else:
+                async def _send_with_temp_bot():
+                    try:
+                        from aiogram import Bot as _LBot
+                        from bot.misc.env import EnvKeys as _LEnv
+                        _tmp = _LBot(token=_LEnv.TOKEN)
+                        try:
+                            await _lsend(_tmp, _text, reply_markup=_markup)
+                        finally:
+                            await _tmp.session.close()
+                    except Exception:
+                        pass
+                safe_create_task(_send_with_temp_bot())
+        except Exception:
+            pass
 class LocalSubscriptionOrderAdmin(ModelView, model=LocalSubscriptionOrder):
     """Admin view for local subscription purchase orders."""
     name = "طلبات الاشتراكات"
