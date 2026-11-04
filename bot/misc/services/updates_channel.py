@@ -94,6 +94,10 @@ async def format_supplier_update(ev: dict) -> str:
         header = "\U00002705 <b>عاد للمخزون</b>"
     elif kind == "low_stock":
         header = "\U000026A0\U0000FE0F <b>على وشك النفاذ</b>"
+    elif kind == "qty_up":
+        header = "\U00002795 <b>تمت إضافة كمية</b>"
+    elif kind == "qty_down":
+        header = "\U00002796 <b>نقصت الكمية</b>"
     else:
         price_old = ev.get("price_old")
         if price_old is not None and price_new is not None and price_new > price_old:
@@ -159,6 +163,10 @@ async def format_local_update(ev: dict) -> str:
         header = "\U00002705 <b>عاد للمخزون</b>"
     elif kind == "low_stock":
         header = "\U000026A0\U0000FE0F <b>على وشك النفاذ</b>"
+    elif kind == "qty_up":
+        header = "\U00002795 <b>تمت إضافة كمية</b>"
+    elif kind == "qty_down":
+        header = "\U00002796 <b>نقصت الكمية</b>"
     else:
         price_old = ev.get("price_old")
         if price_old is not None and price_new is not None and price_new > price_old:
@@ -168,7 +176,7 @@ async def format_local_update(ev: dict) -> str:
         else:
             header = "\U0001F504 <b>تعديل في المنتج</b>"
     lines = [header, f"\U0001F3F7\U0000FE0F <b>{name}</b>"]
-    lines.append(f"\U0001F3EA المصدر: <b>الاشتراكات المحلية</b>")
+    lines.append(f"\U0001F3EA المصدر: <b>الاشتراكات المميزة</b>")
     if price_new is not None:
         try:
             _price_block = await _fpa(price_new or 0)

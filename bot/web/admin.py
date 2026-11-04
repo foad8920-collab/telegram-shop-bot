@@ -1905,8 +1905,10 @@ class LocalSubscriptionView(ModelView, model=LocalSubscription):
                         _kind = "price"
                     elif 0 < _fstock <= 5 and _old_stock > 5:
                         _kind = "low_stock"
-                    elif _fstock != _old_stock or _fprice != _old_price:
-                        _kind = "update"
+                    elif _fstock > _old_stock:
+                        _kind = "qty_up"
+                    elif _fstock < _old_stock:
+                        _kind = "qty_down"
                     else:
                         return
             from bot.misc.services.updates_channel import format_local_update as _lfmt, local_updates_keyboard as _lkb, send_update as _lsend
