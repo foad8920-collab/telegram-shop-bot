@@ -130,7 +130,7 @@ async def _ensure_user(user_id: int, tg_lang: str | None = None) -> dict | None:
         return user
 
     raw_lang = (tg_lang or "").lower()[:2]
-    user_lang = raw_lang if raw_lang in SUPPORTED_LOCALES else "ar"
+    user_lang = "ar"  # New users are always Arabic
 
     await create_user(
         telegram_id=user_id,
@@ -204,7 +204,7 @@ async def test_updates_channel(message: Message):
     from bot.misc.services.updates_channel import send_update as _send_update
     ok = await _send_update(
         message.bot,
-        "Test: updates channel is connected. Product notifications will appear here."
+        "تم ربط قناة التحديثات بنجاح. ستظهر إشعارات المنتجات هنا."
     )
     await message.answer(
         "Test post sent to the updates channel."
@@ -244,7 +244,7 @@ async def start(message: Message, state: FSMContext):
 
         # registration_date is DateTime
         raw_lang = (message.from_user.language_code or "").lower()[:2]
-        user_lang = raw_lang if raw_lang in SUPPORTED_LOCALES else "ar"
+        user_lang = "ar"  # New users are always Arabic
 
         await create_user(
             telegram_id=int(user_id),
@@ -273,6 +273,7 @@ async def start(message: Message, state: FSMContext):
     if channel_username:
         subscribed = await _is_subscribed(message.bot, channel_username, user_id)
         if subscribed is False:
+            set_current_locale("ar")
             await message.answer(localize("subscribe.prompt"), reply_markup=check_sub(channel_username))
             await _delete_quietly(message)
             return
@@ -480,6 +481,7 @@ async def check_sub_to_channel(call: CallbackQuery, state: FSMContext):
             await state.clear()
             return
 
+    set_current_locale("ar")
     await call.answer(localize("errors.not_subscribed"))
 
 
