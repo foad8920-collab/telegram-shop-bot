@@ -1,4 +1,4 @@
-﻿"""Post product updates to the dedicated updates channel, never to support.
+"""Post product updates to the dedicated updates channel, never to support.
 
 The sender never raises: a failed post is logged and returns False, so a
 sync or an admin action can never crash because the channel is unavailable.
@@ -57,3 +57,56 @@ async def send_update(bot, text: str, reply_markup=None) -> bool:
     except Exception as e:
         logger.warning("Failed to post to updates channel: %s", e)
         return False
+
+def _fmt_price(value) -> str:
+    if value is None:
+        return ""
+    try:
+        return f"${value:.2f}"
+    except Exception:
+        return f"${value}"
+
+
+def product_updates_keyboard(supplier_id=None, product_id=None):
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    from aiogram.types import InlineKeyboardButton
+    if supplier_id is not None and product_id is not None:
+        url = f"https://t.me/YemenSubscriptionsBot?start=sv_{supplier_id}_{product_id}"
+    else:
+        url = "https://t.me/YemenSubscriptionsBot"
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text=" اشترِ الآن", url=url))
+    return kb.as_markup()
+
+
+def format_supplier_update(ev: dict) -> str:
+    import html as _html
+    name = _html.escape(str(ev.get("name") or "منتج"), quote=False)
+    kind = ev.get("kind")
+    price_old = ev.get("price_old")
+    price_new = ev.get("price_new")
+    stock_new = ev.get("stock_new")
+    if kind == "new":
+        header = " <b>منتج جديد</b>"
+        price_line = f" السعر: <b>{_fmt_price(price_new)}</b>"
+    elif kind == "out":
+        header = " <b>نفد من المخزون</b>"
+        price_line = f" السعر: <b>{_fmt_price(price_new)}</b>"
+    elif kind == "back":
+        header = " <b>عاد للمخزون</b>"
+        price_line = f" السعر: <b>{_fmt_price(price_new)}</b>"
+    else:
+        if price_old is not None and price_new is not None and price_new > price_old:
+            header = " <b>ارتفع السعر</b>"
+        elif price_old is not None and price_new is not None and price_new < price_old:
+            header = " <b>انخفض السعر</b>"
+        else:
+            header = " <b>تعديل في المنتج</b>"
+        if price_old is not None and price_new is not None and price_old != price_new:
+            price_line = f" السعر القديم: <b>{_fmt_price(price_old)}</b>  السعر الجديد: <b>{_fmt_price(price_new)}</b>"
+        else:
+            price_line = f" السعر: <b>{_fmt_price(price_new)}</b>"
+    lines = [header, f" <b>{name}</b>", price_line]
+    if stock_new is not None:
+        lines.append(f" المخزون: <b>{stock_new}</b>")
+    return "`n".join(lines)

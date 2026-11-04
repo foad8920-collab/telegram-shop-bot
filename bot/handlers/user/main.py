@@ -278,6 +278,63 @@ async def start(message: Message, state: FSMContext):
             await _delete_quietly(message)
             return
 
+    _deep = None
+    _parts = (message.text or "").split(maxsplit=1)
+    if len(_parts) > 1:
+        _payload = _parts[1].strip()
+        if _payload.startswith("sv_"):
+            try:
+                _sv = _payload.split("_")
+                _deep = (int(_sv[1]), int(_sv[2]))
+            except Exception:
+                _deep = None
+    if _deep is not None:
+        try:
+            from bot.database.main import Database as _DB
+            from bot.database.models.main import SupplierProduct as _SP
+            from bot.handlers.user.supplier_products import InlineKeyboardMarkup as _IKM, InlineKeyboardButton as _IKB, format_price_arabic_async as _fpa
+            async with _DB().session() as _sess:
+                _prod = await _sess.get(_SP, _deep[1])
+                if _prod is not None and _prod.supplier_id == _deep[0] and _prod.is_visible is not False:
+                    _name = _prod.name or ""
+                    _available = _prod.is_available and (_prod.is_unlimited or (_prod.stock or 0) > 0)
+                    if _available:
+                        _stock_text = "غير محدود" if _prod.is_unlimited else str(_prod.stock or 0)
+                        _status = f" <b>متوفر</b> (المخزون: {_stock_text})"
+                    else:
+                        _status = " <b>نفدت الكمية</b>"
+                    _desc = (_prod.description or "").strip()
+                    if len(_desc) > 500:
+                        _desc = _desc[:500] + "..."
+                    _lines = [f" <b>{_name}</b>", ""]
+                    if _desc:
+                        _lines.append(f" {_desc}")
+                        _lines.append("")
+                    _lines.append(await _fpa(_prod.selling_price or 0))
+                    _lines.append(f" {_status}")
+                    _text = "`n".join(_lines)
+                    if getattr(_prod, "show_in_local", False):
+                        _back_cb = "shop_local"
+                    elif _prod.category and _prod.category.strip():
+                        _back_cb = f"sv_cat:{_deep[0]}:{_prod.category}"
+                    else:
+                        _back_cb = f"shop_supplier_{_deep[0]}"
+                    if _available:
+                        _markup = _IKM(inline_keyboard=[
+                            [_IKB(text=" شراء الآن", callback_data=f"sv_buy:{_deep[0]}:{_deep[1]}", style="success")],
+                            [_IKB(text=" رجوع", callback_data=_back_cb, style="primary")],
+                        ])
+                    else:
+                        _markup = _IKM(inline_keyboard=[
+                            [_IKB(text=" رجوع", callback_data=_back_cb, style="primary")],
+                        ])
+                    await message.answer(_text, parse_mode="HTML", reply_markup=_markup)
+                    await _delete_quietly(message)
+                    await state.clear()
+                    return
+        except Exception as _de:
+            import logging as _lg
+            _lg.getLogger(__name__).warning("Deep link failed, falling back to menu: %s", _de)
     markup = await main_menu(role=role_data, channel=channel_username, helper=EnvKeys.HELPER_ID)
 
     # Rich welcome message

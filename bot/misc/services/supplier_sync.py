@@ -168,7 +168,7 @@ def _compute_selling_price(
 #  Main sync
 # ============================================================
 
-async def sync_supplier(supplier_id: int, *, manual: bool = False) -> dict:
+async def sync_supplier(supplier_id: int, *, manual: bool = False, bot=None) -> dict:
     """Sync all products of a supplier from its external API.
 
     Returns a report dict with keys:
@@ -263,6 +263,7 @@ async def sync_supplier(supplier_id: int, *, manual: bool = False) -> dict:
             str(p.external_id): p for p in existing_rows
         }
 
+        events = []
         for product in products:
             ext_id_raw = product.get("id") or product.get("external_id")
             if ext_id_raw is None:
@@ -288,6 +289,10 @@ async def sync_supplier(supplier_id: int, *, manual: bool = False) -> dict:
 
             # Lookup existing product FIRST
             existing = existing_by_ext.get(ext_id)
+            _old_price = existing.selling_price if existing is not None else None
+            _old_stock = existing.stock if existing is not None else None
+            _old_available = existing.is_available if existing is not None else None
+            _old_visible = existing.is_visible if existing is not None else True
 
             # ---- Manual price ----
             # Priority:
@@ -377,6 +382,12 @@ async def sync_supplier(supplier_id: int, *, manual: bool = False) -> dict:
                 existing.is_available = is_available
                 existing.raw_data = product
                 existing.last_synced_at = now
+                if _old_visible is not False:
+                    _price_changed = _old_price is not None and _old_price != selling_price
+                    _avail_changed = _old_available != is_available
+                    if _price_changed or _avail_changed:
+                        _kind = "out" if _old_available and not is_available else "back" if not _old_available and is_available else "price"
+                        events.append({"kind": _kind, "name": name, "price_old": _old_price, "price_new": selling_price, "stock_old": _old_stock, "stock_new": stock, "available_old": _old_available, "available_new": is_available, "supplier_id": supplier_id, "product_id": existing.id})
                 report["updated"] += 1
             else:
                 # Insert
@@ -398,6 +409,8 @@ async def sync_supplier(supplier_id: int, *, manual: bool = False) -> dict:
                     description_synced_at=desc_synced_at_new,
                 )
                 session.add(sp)
+                await session.flush()
+                events.append({"kind": "new", "name": name, "price_old": None, "price_new": selling_price, "stock_old": None, "stock_new": stock, "available_old": False, "available_new": is_available, "supplier_id": supplier_id, "product_id": sp.id})
                 report["added"] += 1
 
         # Mark missing products as unavailable
@@ -405,6 +418,8 @@ async def sync_supplier(supplier_id: int, *, manual: bool = False) -> dict:
             if ext_id not in seen_external_ids:
                 if prod.is_available:
                     prod.is_available = False
+                    if prod.is_visible is not False:
+                        events.append({"kind": "out", "name": prod.name, "price_old": prod.selling_price, "price_new": prod.selling_price, "stock_old": prod.stock, "stock_new": prod.stock, "available_old": True, "available_new": False, "supplier_id": prod.supplier_id, "product_id": prod.id})
                     report["removed"] += 1
 
         # Update supplier.last_sync_*
@@ -418,6 +433,28 @@ async def sync_supplier(supplier_id: int, *, manual: bool = False) -> dict:
 
         await session.commit()
 
+    if events:
+        try:
+            from bot.misc.services.updates_channel import send_update as _send_update, format_supplier_update as _format_update, product_updates_keyboard as _buy_keyboard
+            if bot is not None:
+                for _ev in events:
+                    try:
+                        await _send_update(bot, _format_update(_ev), reply_markup=_buy_keyboard(_ev.get("supplier_id"), _ev.get("product_id")))
+                        await asyncio.sleep(1)
+                    except Exception as _pe:
+                        logger.warning("Updates post failed: %s", _pe)
+            else:
+                from aiogram import Bot as _Bot
+                from bot.misc import EnvKeys as _EnvKeys
+                async with _Bot(token=_EnvKeys.TOKEN) as _tmp_bot:
+                    for _ev in events:
+                        try:
+                            await _send_update(_tmp_bot, _format_update(_ev), reply_markup=_buy_keyboard(_ev.get("supplier_id"), _ev.get("product_id")))
+                            await asyncio.sleep(1)
+                        except Exception as _pe:
+                            logger.warning("Updates post failed: %s", _pe)
+        except Exception as _e:
+            logger.warning("Updates posting failed: %s", _e)
     report["status"] = "success"
     await _record_sync_success(supplier_id, report)
     logger.info("Supplier %s sync done: %s", supplier_id, report)
