@@ -312,7 +312,7 @@ async def start(message: Message, state: FSMContext):
                         _lines.append("")
                     _lines.append(await _fpa(_prod.selling_price or 0))
                     _lines.append(f" {_status}")
-                    _text = "`n".join(_lines)
+                    _text = chr(10).join(_lines)
                     if getattr(_prod, "show_in_local", False):
                         _back_cb = "shop_local"
                     elif _prod.category and _prod.category.strip():

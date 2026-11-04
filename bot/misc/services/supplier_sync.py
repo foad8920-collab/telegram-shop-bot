@@ -385,8 +385,9 @@ async def sync_supplier(supplier_id: int, *, manual: bool = False, bot=None) -> 
                 if _old_visible is not False:
                     _price_changed = _old_price is not None and _old_price != selling_price
                     _avail_changed = _old_available != is_available
-                    if _price_changed or _avail_changed:
-                        _kind = "out" if _old_available and not is_available else "back" if not _old_available and is_available else "price"
+                    _stock_crossed_low = _old_stock is not None and _old_stock > 5 and stock is not None and 0 < stock <= 5
+                    if _price_changed or _avail_changed or _stock_crossed_low:
+                        _kind = "out" if _old_available and not is_available else "back" if not _old_available and is_available else "price" if _price_changed else "low_stock" if _stock_crossed_low else "price"
                         events.append({"kind": _kind, "name": name, "price_old": _old_price, "price_new": selling_price, "stock_old": _old_stock, "stock_new": stock, "available_old": _old_available, "available_new": is_available, "supplier_id": supplier_id, "product_id": existing.id})
                 report["updated"] += 1
             else:
@@ -439,7 +440,7 @@ async def sync_supplier(supplier_id: int, *, manual: bool = False, bot=None) -> 
             if bot is not None:
                 for _ev in events:
                     try:
-                        await _send_update(bot, _format_update(_ev), reply_markup=_buy_keyboard(_ev.get("supplier_id"), _ev.get("product_id")))
+                        await _send_update(bot, await _format_update(_ev), reply_markup=_buy_keyboard(_ev.get("supplier_id"), _ev.get("product_id")))
                         await asyncio.sleep(1)
                     except Exception as _pe:
                         logger.warning("Updates post failed: %s", _pe)
@@ -449,7 +450,7 @@ async def sync_supplier(supplier_id: int, *, manual: bool = False, bot=None) -> 
                 async with _Bot(token=_EnvKeys.TOKEN) as _tmp_bot:
                     for _ev in events:
                         try:
-                            await _send_update(_tmp_bot, _format_update(_ev), reply_markup=_buy_keyboard(_ev.get("supplier_id"), _ev.get("product_id")))
+                            await _send_update(_tmp_bot, await _format_update(_ev), reply_markup=_buy_keyboard(_ev.get("supplier_id"), _ev.get("product_id")))
                             await asyncio.sleep(1)
                         except Exception as _pe:
                             logger.warning("Updates post failed: %s", _pe)

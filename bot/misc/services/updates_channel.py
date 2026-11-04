@@ -75,38 +75,41 @@ def product_updates_keyboard(supplier_id=None, product_id=None):
     else:
         url = "https://t.me/YemenSubscriptionsBot"
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text=" اشترِ الآن", url=url))
+    kb.row(InlineKeyboardButton(text=" اشترِ الآن", url=url, style="success"))
     return kb.as_markup()
 
 
-def format_supplier_update(ev: dict) -> str:
+async def format_supplier_update(ev: dict) -> str:
     import html as _html
+    from bot.database.methods.transactions import format_price_arabic_async as _fpa
     name = _html.escape(str(ev.get("name") or "منتج"), quote=False)
     kind = ev.get("kind")
-    price_old = ev.get("price_old")
     price_new = ev.get("price_new")
     stock_new = ev.get("stock_new")
     if kind == "new":
         header = " <b>منتج جديد</b>"
-        price_line = f" السعر: <b>{_fmt_price(price_new)}</b>"
     elif kind == "out":
         header = " <b>نفد من المخزون</b>"
-        price_line = f" السعر: <b>{_fmt_price(price_new)}</b>"
     elif kind == "back":
         header = " <b>عاد للمخزون</b>"
-        price_line = f" السعر: <b>{_fmt_price(price_new)}</b>"
+    elif kind == "low_stock":
+        header = " <b>على وشك النفاذ</b>"
     else:
+        price_old = ev.get("price_old")
         if price_old is not None and price_new is not None and price_new > price_old:
             header = " <b>ارتفع السعر</b>"
         elif price_old is not None and price_new is not None and price_new < price_old:
             header = " <b>انخفض السعر</b>"
         else:
             header = " <b>تعديل في المنتج</b>"
-        if price_old is not None and price_new is not None and price_old != price_new:
-            price_line = f" السعر القديم: <b>{_fmt_price(price_old)}</b>  السعر الجديد: <b>{_fmt_price(price_new)}</b>"
-        else:
-            price_line = f" السعر: <b>{_fmt_price(price_new)}</b>"
-    lines = [header, f" <b>{name}</b>", price_line]
+    lines = [header, f" <b>{name}</b>"]
+    if price_new is not None:
+        try:
+            lines.append(await _fpa(price_new or 0))
+        except Exception:
+            lines.append(f" السعر: <b>{price_new}</b>")
     if stock_new is not None:
-        lines.append(f" المخزون: <b>{stock_new}</b>")
-    return "`n".join(lines)
+        lines.append(f" الكمية المتبقية: <b>{stock_new}</b>")
+    if stock_new is not None and 0 < stock_new <= 5 and kind != "out":
+        lines.append(f" على وشك النفاذ! تبقى <b>{stock_new}</b> فقط")
+    return chr(10).join(lines)
