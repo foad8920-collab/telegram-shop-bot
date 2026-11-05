@@ -184,6 +184,16 @@ async def format_local_update(ev: dict) -> str:
             if _yer_ov is not None:
                 import re as _re
                 _price_block = _re.sub(r"\d+ ريال يمني", f"{int(_yer_ov)} ريال يمني", _price_block, count=1)
+                try:
+                    from bot.database.methods.transactions import get_currency_rates as _gcr
+                    from decimal import Decimal as _SDec2, ROUND_CEILING as _SCE2
+                    _rates2 = await _gcr()
+                    _sar_rate = _rates2.get("sar_to_yer") if isinstance(_rates2, dict) else None
+                    if _sar_rate:
+                        _sar_v2 = (_SDec2(str(int(_yer_ov))) / _SDec2(str(_sar_rate))).quantize(_SDec2("0.01"), rounding=_SCE2)
+                        _price_block = _re.sub(r"[\d.]+ ريال سعودي", f"{_sar_v2} ريال سعودي", _price_block, count=1)
+                except Exception:
+                    pass
             for _pl in _price_block.split(chr(10)):
                 if _pl.strip():
                     lines.append(f"\U0001F4B0 {_pl.strip()}")

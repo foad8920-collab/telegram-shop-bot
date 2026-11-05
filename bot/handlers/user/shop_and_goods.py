@@ -735,6 +735,9 @@ async def local_sub_details_handler(call: CallbackQuery, state: FSMContext):
             yer_str = f"{prices['yer']} ريال يمني"
             if getattr(sub, "price_yer", None) is not None:
                 yer_str = f"{int(sub.price_yer)} ريال يمني"
+                from decimal import Decimal as _SDec, ROUND_CEILING as _SCE
+                _sar_v = (_SDec(str(int(sub.price_yer))) / _SDec(str(rates["sar_to_yer"]))).quantize(_SDec("0.01"), rounding=_SCE)
+                sar_str = f"{_sar_v} ريال سعودي"
         except Exception:
             usd_str = f"${sub.price}"
             sar_str = None
