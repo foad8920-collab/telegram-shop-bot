@@ -1888,7 +1888,7 @@ class LocalSubscriptionView(ModelView, model=LocalSubscription):
                 _yer_changed = _nyer is not None and _nyer != _old_yer
                 _price_changed = _nprice is not None and _old_price is not None and _YDec(str(_nprice)) != _YDec(str(_old_price))
             if _yer_changed:
-                data["price"] = (_YDec(str(_nyer)) / _yrate).quantize(_YDec("0.01"), rounding=_YHU)
+                data["price"] = (_YDec(str(_nyer)) / _yrate).quantize(_YDec("0.01"), rounding=_YCE)
             elif _price_changed:
                 data["price_yer"] = int((_YDec(str(_nprice)) * _yrate).quantize(_YDec("1"), rounding=_YCE))
         except Exception:
