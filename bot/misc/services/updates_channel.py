@@ -180,6 +180,10 @@ async def format_local_update(ev: dict) -> str:
     if price_new is not None:
         try:
             _price_block = await _fpa(price_new or 0)
+            _yer_ov = ev.get("price_yer")
+            if _yer_ov is not None:
+                import re as _re
+                _price_block = _re.sub(r"\d+ ريال يمني", f"{int(_yer_ov)} ريال يمني", _price_block, count=1)
             for _pl in _price_block.split(chr(10)):
                 if _pl.strip():
                     lines.append(f"\U0001F4B0 {_pl.strip()}")

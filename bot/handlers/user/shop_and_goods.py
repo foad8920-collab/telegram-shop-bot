@@ -733,6 +733,8 @@ async def local_sub_details_handler(call: CallbackQuery, state: FSMContext):
             usd_str = f"${prices['usd']}"
             sar_str = f"{prices['sar']} ريال سعودي"
             yer_str = f"{prices['yer']} ريال يمني"
+            if getattr(sub, "price_yer", None) is not None:
+                yer_str = f"{int(sub.price_yer)} ريال يمني"
         except Exception:
             usd_str = f"${sub.price}"
             sar_str = None

@@ -572,6 +572,7 @@ class LocalSubscription(Database.BASE):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text)
     price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    price_yer: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     category: Mapped[str] = mapped_column(String(100), default='عام')
     quantity: Mapped[int] = mapped_column(Integer, default=1)
     style: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, default='success')

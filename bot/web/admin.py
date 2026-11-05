@@ -1723,6 +1723,7 @@ class LocalSubscriptionView(ModelView, model=LocalSubscription):
         "codes_available",
         LocalSubscription.codes_per_purchase,
         LocalSubscription.price,
+        LocalSubscription.price_yer,
         LocalSubscription.quantity,
         LocalSubscription.style,
         LocalSubscription.is_active,
@@ -1751,6 +1752,8 @@ class LocalSubscriptionView(ModelView, model=LocalSubscription):
         "codes_per_purchase": "الأكواد لكل شراء",
         "codes_available": "الأكواد المتاحة",
         "sellable_qty": "قابل للبيع",
+        "price": "السعر (دولار)",
+        "price_yer": "السعر (ريال يمني)",
         "quantity": "الكمية (يدوي)",
         "is_active": "مفعّل",
     }
@@ -1759,6 +1762,7 @@ class LocalSubscriptionView(ModelView, model=LocalSubscription):
         LocalSubscription.name,
         LocalSubscription.description,
         LocalSubscription.price,
+        LocalSubscription.price_yer,
         LocalSubscription.category,
         LocalSubscription.quantity,
         LocalSubscription.style,
@@ -1844,6 +1848,51 @@ class LocalSubscriptionView(ModelView, model=LocalSubscription):
             await super().on_model_change(data, model, is_created, request)
         except Exception:
             pass
+        try:
+            from decimal import Decimal as _YDec, ROUND_HALF_UP as _YHU, ROUND_CEILING as _YCE
+            _yrate = _YDec("535")
+            try:
+                from bot.database.main import Database as _YDB
+                from bot.database.models.main import CurrencyRates as _YCR
+                async with _YDB().session() as _ysess:
+                    _yrow = await _ysess.get(_YCR, 1)
+                    if _yrow is not None and _yrow.usd_to_yer:
+                        _yrate = _YDec(str(_yrow.usd_to_yer))
+            except Exception:
+                pass
+            _nprice_raw = data.get("price")
+            _nyer_raw = data.get("price_yer")
+            _nprice = None if _nprice_raw in (None, "") else _nprice_raw
+            _nyer = None if _nyer_raw in (None, "") else _nyer_raw
+            _old_price = None
+            _old_yer = None
+            if not is_created:
+                try:
+                    _mid0 = int(getattr(model, "id", 0) or 0)
+                    if _mid0 > 0:
+                        from bot.database.main import Database as _YDB2
+                        from bot.database.models.main import LocalSubscription as _YSUB
+                        from sqlalchemy import select as _ysel
+                        async with _YDB2().session() as _ysess2:
+                            _yres = await _ysess2.execute(_ysel(_YSUB).where(_YSUB.id == _mid0))
+                            _yrec = _yres.scalar_one_or_none()
+                            if _yrec is not None:
+                                _old_price = _yrec.price
+                                _old_yer = getattr(_yrec, "price_yer", None)
+                except Exception:
+                    pass
+            if is_created:
+                _yer_changed = _nyer is not None
+                _price_changed = _nprice is not None
+            else:
+                _yer_changed = _nyer is not None and _nyer != _old_yer
+                _price_changed = _nprice is not None and _old_price is not None and _YDec(str(_nprice)) != _YDec(str(_old_price))
+            if _yer_changed:
+                data["price"] = (_YDec(str(_nyer)) / _yrate).quantize(_YDec("0.01"), rounding=_YHU)
+            elif _price_changed:
+                data["price_yer"] = int((_YDec(str(_nprice)) * _yrate).quantize(_YDec("1"), rounding=_YCE))
+        except Exception:
+            pass
         if is_created:
             return
         try:
@@ -1880,6 +1929,7 @@ class LocalSubscriptionView(ModelView, model=LocalSubscription):
                     return
                 _fname = _fresh.name or ""
                 _fprice = _fresh.price
+                _fyer = getattr(_fresh, "price_yer", None)
                 _fstock = int(_fresh.sellable_quantity or 0)
                 _factive = bool(_fresh.is_active)
             if not _factive:
@@ -1912,7 +1962,7 @@ class LocalSubscriptionView(ModelView, model=LocalSubscription):
                     else:
                         return
             from bot.misc.services.updates_channel import format_local_update as _lfmt, local_updates_keyboard as _lkb, send_update as _lsend
-            _ev = {"kind": _kind, "name": _fname, "price_new": _fprice, "price_old": _old_price, "stock_new": _fstock}
+            _ev = {"kind": _kind, "name": _fname, "price_new": _fprice, "price_yer": _fyer, "price_old": _old_price, "stock_new": _fstock}
             _text = await _lfmt(_ev)
             _markup = _lkb(_lid)
             if _notifier_bot is not None:
