@@ -48,7 +48,7 @@
   "btn.referral": "🎲 نظام الإحالة",
   "btn.purchased": "🎁 المشتريات",
   "profile.referral_id": "👤 <b>المُحيل</b> — <code>{id}</code>",
-  "subscribe.prompt": "يرجى الاشتراك في قناة الأخبار أولاً",
+  "subscribe.prompt": "يرجى الاشتراك في القناة للدخول إلى المتجر واستعراض الاشتراكات",
   "subscribe.open_channel": "فتح القناة",
   "profile.id": "🆔 <b>المعرّف</b> — <code>{id}</code>",
   "profile.balance": "💳 <b>الرصيد</b> — <code>{amount}</code> {currency}",

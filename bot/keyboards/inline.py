@@ -464,11 +464,12 @@ def question_buttons(question: str, back_data: str) -> InlineKeyboardMarkup:
 def check_sub(channel_username: str) -> InlineKeyboardMarkup:
     """
     checks the channel subscription.
+    Gate buttons are fixed Arabic with the green (success) style.
     """
     kb = InlineKeyboardBuilder()
     kb.row(
-        InlineKeyboardButton(text=localize("btn.channel"), url=f"https://t.me/{channel_username}"),
-        InlineKeyboardButton(text=localize("btn.check_subscription"), callback_data="sub_channel_done"),
+        InlineKeyboardButton(text="\u2139\ufe0f قناة الأخبار", url=f"https://t.me/{channel_username}", style="success"),
+        InlineKeyboardButton(text="\U0001F504 التحقق من الاشتراك", callback_data="sub_channel_done", style="success"),
     )
     return kb.as_markup()
 

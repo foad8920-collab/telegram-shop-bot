@@ -182,14 +182,18 @@ async def _is_subscribed(bot, channel_username: str, user_id: int) -> bool | Non
     """Whether the user is in the required channel.
 
     Returns None when the check could not be performed (private channel, bad
-    link, bot not an admin) so callers can treat it as "don't block".
+    link, bot not an admin); callers must treat None as "block and retry".
     """
+    _chat_id = _channel_chat_id(channel_username)
     try:
         chat_member = await bot.get_chat_member(
-            chat_id=_channel_chat_id(channel_username), user_id=user_id
+            chat_id=_chat_id, user_id=user_id
         )
     except (TelegramBadRequest, TelegramForbiddenError) as e:
-        logger.warning(f"Channel subscription check failed for user {user_id}: {e}")
+        logger.warning(f"Channel subscription check failed for user {user_id} in {_chat_id}: {e}")
+        return None
+    except Exception as e:
+        logger.warning(f"Channel subscription check failed for user {user_id} in {_chat_id}: {type(e).__name__}: {e}")
         return None
     return await check_sub_channel(chat_member)
 
@@ -269,10 +273,10 @@ async def start(message: Message, state: FSMContext):
 
     channel_username = _updates_channel_username()
 
-    # Optional subscription check. A failed check (None) does not block entry.
+    # Mandatory subscription check. Only True opens the bot; False or None (check failed) blocks entry.
     if channel_username:
         subscribed = await _is_subscribed(message.bot, channel_username, user_id)
-        if subscribed is False:
+        if subscribed is not True:
             set_current_locale("ar")
             await message.answer(localize("subscribe.prompt"), reply_markup=check_sub(channel_username))
             await _delete_quietly(message)
@@ -532,8 +536,8 @@ async def check_sub_to_channel(call: CallbackQuery, state: FSMContext):
     helper = EnvKeys.HELPER_ID
 
     if channel_username:
-        # None (check unavailable) is treated as subscribed, matching /start: a misconfigured channel must not lock everyone out of the bot.
-        if await _is_subscribed(call.bot, channel_username, user_id) is not False:
+        # Mandatory check: only True opens the bot; False or None (check unavailable) blocks entry.
+        if await _is_subscribed(call.bot, channel_username, user_id) is True:
             await _ensure_user(user_id)
             role = await check_role_cached(user_id) or 0
             markup = await main_menu(role, channel_username, helper)
@@ -542,7 +546,7 @@ async def check_sub_to_channel(call: CallbackQuery, state: FSMContext):
             return
 
     set_current_locale("ar")
-    await call.answer(localize("errors.not_subscribed"))
+    await call.answer(localize("subscribe.prompt"), show_alert=True)
 
 
 # --- Operation History ---
