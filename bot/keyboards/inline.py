@@ -473,6 +473,20 @@ def check_sub(channel_username: str) -> InlineKeyboardMarkup:
     )
     return kb.as_markup()
 
+def welcome_after_check_keyboard() -> InlineKeyboardMarkup:
+    """Welcome screen after a passed subscription check.
+
+    One clear green button into the shop, plus the main menu.
+    """
+    kb = InlineKeyboardBuilder()
+    kb.row(
+        InlineKeyboardButton(text="\U0001F6D2 الدخول إلى الاشتراكات", callback_data="shop", style="success"),
+    )
+    kb.row(
+        InlineKeyboardButton(text="\U0001F3E0 القائمة الرئيسية", callback_data="back_to_menu"),
+    )
+    return kb.as_markup()
+
 
 def rating_keyboard() -> InlineKeyboardMarkup:
     """Rating selection keyboard (1-5 stars)."""

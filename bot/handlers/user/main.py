@@ -18,7 +18,7 @@ from bot.database.methods.read import get_cart_count, invalidate_user_cache
 from bot.database.methods.lazy_queries import query_user_operations_history
 from bot.handlers.other import check_sub_channel, _parse_channel_username
 from bot.keyboards import main_menu, back, profile_keyboard, check_sub, language_menu
-from bot.keyboards.inline import profile_keyboard_async
+from bot.keyboards.inline import profile_keyboard_async, welcome_after_check_keyboard
 from bot.misc import EnvKeys
 from bot.misc.metrics import get_metrics
 from bot.i18n import localize, set_current_locale, set_user_cache_locale, SUPPORTED_LOCALES
@@ -569,6 +569,36 @@ async def profile_callback_handler(call: CallbackQuery, state: FSMContext):
     await state.clear()
 
 
+def _build_check_welcome_text(first_name: str = "") -> str:
+    """One-time welcome after the channel check passes.
+
+    Dedicated welcome (not the /start stats welcome): what the store
+    offers, how to pay, and the next step. Emoji as unicode escapes
+    only, so pasting never strips them.
+    """
+    name = (first_name or "").strip() or "عزيزي"
+    lines = [
+        "\U0001F1FE\U0001F1EA <b>منصة اليمن الإلكترونية</b> \U0001F6D2",
+        f"أهلاً بك، {name}! \U0001F44B",
+        "",
+        "وجهتك الأولى للاشتراكات الرقمية والذكاء الاصطناعي في اليمن \u26A1",
+        "",
+        "\u2728 <b>خدماتنا المميزة:</b>",
+        "\U0001F916 اشتراكات الذكاء الاصطناعي (ChatGPT Plus \u2022 Gemini وغيرها)",
+        "\U0001F3A8 أدوات التصميم والمونتاج (Canva Pro وغيرها)",
+        "\U0001F3AC باقات وحسابات رقمية متنوعة بأسعار مخفضة",
+        "",
+        "\U0001F4B3 <b>طرق الدفع المحلية المباشرة:</b>",
+        "\U0001F3E6 بنك الكريمي (ريال يمني YER \u2022 سعودي SAR \u2022 دولار USD)",
+        "\U0001F4F1 المحافظ الإلكترونية: محفظة جيب | موبايل موني",
+        "",
+        "\U0001F680 تفعيل سريع | \U0001F91D مصداقية وأمان | \U0001F4AC دعم فني متواصل",
+        "",
+        "\U0001F447 اضغط زر <b>\u00ABالدخول إلى الاشتراكات\u00BB</b> بالأسفل، واختر اشتراكك وادفع بإحدى الطرق أعلاه.",
+    ]
+    return NL.join(lines)
+
+
 @router.callback_query(F.data == "sub_channel_done")
 async def check_sub_to_channel(call: CallbackQuery, state: FSMContext):
     """
@@ -582,9 +612,12 @@ async def check_sub_to_channel(call: CallbackQuery, state: FSMContext):
         # Mandatory check: only True opens the bot; False or None (check unavailable) blocks entry.
         if await _is_subscribed(call.bot, channel_username, user_id) is True:
             await _ensure_user(user_id)
-            role = await check_role_cached(user_id) or 0
-            markup = await main_menu(role, channel_username, helper)
-            await call.message.edit_text(localize("menu.title"), reply_markup=markup)
+            welcome_text = _build_check_welcome_text(call.from_user.first_name or "")
+            await call.message.edit_text(
+                welcome_text,
+                reply_markup=welcome_after_check_keyboard(),
+                parse_mode="HTML",
+            )
             await state.clear()
             return
 
