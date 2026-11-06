@@ -310,6 +310,8 @@ _ALLOWED_UPDATES = [
     "callback_query",
     "pre_checkout_query",
     "successful_payment",
+    "chat_member",
+    "my_chat_member",
 ]
 
 

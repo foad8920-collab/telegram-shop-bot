@@ -1,4 +1,4 @@
-﻿import logging
+import logging
 import os
 from dotenv import load_dotenv
 
@@ -74,6 +74,7 @@ class EnvKeys(ABC):
     CHANNEL_ID: Final = _get_optional("CHANNEL_ID", "")
     UPDATES_CHANNEL_URL: Final = _get_optional("UPDATES_CHANNEL_URL", "")
     UPDATES_CHANNEL_ID: Final = _get_optional("UPDATES_CHANNEL_ID", "")
+    MONITORING_CHANNEL_ID: Final = _get_optional("MONITORING_CHANNEL_ID", "")
     HELPER_ID: Final = _get_optional("HELPER_ID", "")
     RULES: Final = _get_optional("RULES", "")
 

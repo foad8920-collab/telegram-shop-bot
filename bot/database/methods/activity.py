@@ -37,6 +37,8 @@ ACTION_LABELS = {
     "error":            " خطأ",
     "suspicious":       " نشاط مشبوه",
     "admin_action":     " إجراء إداري",
+    "channel_join":    " انضمام إلى قناة التحديثات",
+    "channel_leave":   " مغادرة قناة التحديثات",
 }
 
 

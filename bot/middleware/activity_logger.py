@@ -7,7 +7,8 @@ from typing import Any, Awaitable, Callable
 from aiogram import BaseMiddleware
 from aiogram.types import CallbackQuery, Message, TelegramObject
 
-from bot.database.methods.activity import log_activity_bg
+from bot.database.methods.activity import ACTION_LABELS, log_activity_bg
+from bot.misc.services.monitoring_channel import format_monitoring_post, send_monitoring_bg
 
 logger = logging.getLogger(__name__)
 
@@ -262,6 +263,14 @@ class ActivityLoggerMiddleware(BaseMiddleware):
                         username=username, first_name=first_name,
                         target=target, target_type=target_type,
                     )
+                    _mon_bot = data.get("bot") or getattr(event, "bot", None)
+                    if _mon_bot is not None:
+                        _mon_text = format_monitoring_post(
+                            user_id=user_id, username=username, first_name=first_name,
+                            action_ar=ACTION_LABELS.get(action_type, action_type),
+                            target=target, target_type=target_type,
+                        )
+                        send_monitoring_bg(_mon_bot, _mon_text)
 
                 elif isinstance(event, CallbackQuery):
                     cb_data = event.data or ""
@@ -273,6 +282,14 @@ class ActivityLoggerMiddleware(BaseMiddleware):
                         target=target, target_type=target_type,
                         details={"callback_data": cb_data[:200]},
                     )
+                    _mon_bot = data.get("bot") or getattr(event, "bot", None)
+                    if _mon_bot is not None:
+                        _mon_text = format_monitoring_post(
+                            user_id=user_id, username=username, first_name=first_name,
+                            action_ar=ACTION_LABELS.get(action_type, action_type),
+                            target=target, target_type=target_type,
+                        )
+                        send_monitoring_bg(_mon_bot, _mon_text)
         except Exception as e:
             logger.exception("ActivityLoggerMiddleware error: %s", e)
 
