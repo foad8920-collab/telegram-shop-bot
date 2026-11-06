@@ -388,9 +388,8 @@ async def sync_supplier(supplier_id: int, *, manual: bool = False, bot=None) -> 
                     _stock_back = _old_stock is not None and _old_stock <= 0 and stock is not None and stock > 0
                     _stock_crossed_low = _old_stock is not None and _old_stock > 5 and stock is not None and 0 < stock <= 5
                     _stock_up = _old_stock is not None and stock is not None and stock > _old_stock
-                    _stock_down = _old_stock is not None and stock is not None and stock < _old_stock
-                    if _price_changed or _stock_out or _stock_back or _stock_crossed_low or _stock_up or _stock_down:
-                        _kind = "out" if _stock_out else "back" if _stock_back else "price" if _price_changed else "low_stock" if _stock_crossed_low else "qty_up" if _stock_up else "qty_down"
+                    if _price_changed or _stock_out or _stock_back or _stock_crossed_low or _stock_up:
+                        _kind = "out" if _stock_out else "back" if _stock_back else "price" if _price_changed else "low_stock" if _stock_crossed_low else "qty_up"
                         events.append({"kind": _kind, "name": name, "price_old": _old_price, "price_new": selling_price, "stock_old": _old_stock, "stock_new": stock, "available_old": _old_available, "available_new": is_available, "supplier_id": supplier_id, "product_id": existing.id})
                 report["updated"] += 1
             else:
