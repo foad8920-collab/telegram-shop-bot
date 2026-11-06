@@ -28,7 +28,10 @@ def format_monitoring_post(*, user_id, username=None, first_name=None,
                            action_ar, target=None, target_type=None):
     """One compact Arabic post for the private monitoring channel."""
     now = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=3)
-    time_s = now.strftime("%H:%M:%S")
+    _hour12 = now.hour % 12 or 12
+    _suffix = "صباحا" if now.hour < 12 else "مساء"
+    time_s = f"{_hour12}:{now.minute:02d}:{now.second:02d} {_suffix}"
+    date_s = now.strftime("%d/%m/%Y")
     name = (first_name or "").strip() or "-"
     user_line = "@" + username if username else "بدون معرف"
     lines = [
@@ -41,6 +44,7 @@ def format_monitoring_post(*, user_id, username=None, first_name=None,
     if target:
         lines.append("\U0001F3AF الهدف: " + html.escape(str(target)))
     lines.append("\U0001F550 الوقت: " + time_s)
+    lines.append("\U0001F4C5 التاريخ: " + date_s)
     return chr(10).join(lines)
 
 
