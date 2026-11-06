@@ -1,5 +1,5 @@
-from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram import BaseMiddleware, Router, F
+from aiogram.types import CallbackQuery, Message, TelegramObject
 from aiogram.enums.chat_type import ChatType
 from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
@@ -7,6 +7,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 import asyncio
 import datetime
 from html import escape as _esc
+from typing import Any, Awaitable, Callable, Dict
 
 from bot.database.methods import (
     select_max_role_id, create_user, check_role_cached, check_user,
@@ -196,6 +197,48 @@ async def _is_subscribed(bot, channel_username: str, user_id: int) -> bool | Non
         logger.warning(f"Channel subscription check failed for user {user_id} in {_chat_id}: {type(e).__name__}: {e}")
         return None
     return await check_sub_channel(chat_member)
+
+
+class SubscriptionGateMiddleware(BaseMiddleware):
+    """Re-check channel membership on every user-router button press.
+
+    Only a verified member (True) passes. False (left/kicked) and None
+    (check failed) are blocked with the join gate, exactly like /start.
+    The check button itself ("sub_channel_done") is exempt: it is the
+    only way back in after subscribing.
+    """
+
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: Dict[str, Any],
+    ) -> Any:
+        if not isinstance(event, CallbackQuery):
+            return await handler(event, data)
+        if event.data == "sub_channel_done":
+            return await handler(event, data)
+        channel_username = _updates_channel_username()
+        if not channel_username:
+            return await handler(event, data)
+        subscribed = await _is_subscribed(
+            event.bot, channel_username, event.from_user.id
+        )
+        if subscribed is True:
+            return await handler(event, data)
+        set_current_locale("ar")
+        try:
+            await event.answer(localize("subscribe.prompt"), show_alert=True)
+        except Exception as e:
+            logger.debug(f"Gate middleware could not answer callback: {e}")
+        try:
+            await event.message.edit_text(
+                localize("subscribe.prompt"),
+                reply_markup=check_sub(channel_username),
+            )
+        except Exception as e:
+            logger.debug(f"Gate middleware could not edit message: {e}")
+        return None
 
 
 @router.message(F.text == "/test_updates")

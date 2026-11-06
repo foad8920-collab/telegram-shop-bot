@@ -1,3 +1,4 @@
+from .main import SubscriptionGateMiddleware
 from .main import router as main_router
 from .balance_and_payment import router as balance_and_payment_router
 from .shop_and_goods import router as shop_and_goods_router
@@ -32,3 +33,4 @@ router.include_router(supplier_buy_admin_router)
 router.include_router(shop_search_router)
 router.include_router(my_purchases_router)
 router.include_router(top_up_admin_router)
+router.callback_query.outer_middleware(SubscriptionGateMiddleware())
