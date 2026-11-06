@@ -18,6 +18,7 @@ from bot.database.models.main import (
     SupplierOrder, SupplierProduct, Supplier, User,
 )
 from bot.states import SupplierBuy
+from bot.misc.services.updates_channel import send_purchase_post
 from bot.misc import EnvKeys
 
 
@@ -198,6 +199,7 @@ async def supplier_send_content_receive(message: Message, state: FSMContext) -> 
 
             quantity = order.quantity
             total = _fmt(order.selling_price) if order.selling_price else "-"
+            _unit_price = order.selling_price
 
             product = await session.get(SupplierProduct, order.product_id)
             product_name = str(product.name) if product else "-"
@@ -253,6 +255,13 @@ async def supplier_send_content_receive(message: Message, state: FSMContext) -> 
         parse_mode="HTML",
     )
 
+    try:
+        _qty_s = int(quantity or 1)
+        _up_s = Decimal(str(_unit_price or 0)) if "_unit_price" in dir() else Decimal("0")
+        _total_s = _fmt((_up_s * _qty_s).quantize(Decimal("0.01")))
+        await send_purchase_post(message.bot, product_name, _qty_s, _total_s, "رصيد البوت", buyer_id, order_id)
+    except Exception as _e:
+        logger.warning("Failed to post purchase: %s", _e)
     await state.clear()
 
 

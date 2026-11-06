@@ -204,3 +204,42 @@ async def format_local_update(ev: dict) -> str:
     if stock_new is not None and 0 < stock_new <= 5 and kind != "out":
         lines.append(f"\U000026A0\U0000FE0F على وشك النفاذ! تبقى <b>{stock_new}</b> فقط")
     return chr(10).join(lines)
+
+def _mask_user_id(user_id) -> str:
+    s = str(user_id or "")
+    if len(s) <= 5:
+        return s[:2] + "****" if len(s) > 2 else "****"
+    return s[:3] + "****" + s[-2:]
+
+
+def format_purchase_post(product_name, qty, total_str, payment_name, buyer_id, order_id) -> str:
+    import html as _html
+    from datetime import datetime, timezone, timedelta
+    name = _html.escape(str(product_name or "-"), quote=False)
+    pay = _html.escape(str(payment_name or "-"), quote=False)
+    masked = _mask_user_id(buyer_id)
+    now = datetime.now(timezone.utc) + timedelta(hours=3)
+    when = now.strftime("%Y-%m-%d %H:%M")
+    lines = [
+        "\U0001F6D2 <b>عملية شراء جديدة!</b>",
+        "",
+        f"\U0001F4E6 المنتج: <b>{name}</b>",
+        f"\U0001F522 الكمية: <b>{qty}</b>",
+        f"\U0001F4B0 الإجمالي: <b>{_html.escape(str(total_str), quote=False)}</b>",
+        f"\U0001F4B3 طريقة الدفع: <b>{pay}</b>",
+        f"\U0001F552 الوقت: <b>{when}</b>",
+        f"\U0001F464 المشتري: <code>{masked}</code>",
+        f"\U0001F522 رقم الطلب: <code>#{order_id}</code>",
+        "",
+        "\U00002705 <b>تم التوصيل بنجاح</b>",
+    ]
+    return chr(10).join(lines)
+
+
+async def send_purchase_post(bot, product_name, qty, total_str, payment_name, buyer_id, order_id) -> bool:
+    try:
+        text = format_purchase_post(product_name, qty, total_str, payment_name, buyer_id, order_id)
+        return await send_update(bot, text)
+    except Exception as e:
+        logger.warning("Failed to post purchase: %s", e)
+        return False

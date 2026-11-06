@@ -27,6 +27,7 @@ from bot.database.models.main import (
     LocalSubscriptionOrder, LocalSubscriptionCode,
 )
 from bot.states import LocalBuy
+from bot.misc.services.updates_channel import send_purchase_post
 
 
 logger = logging.getLogger(__name__)
@@ -363,6 +364,11 @@ async def payment_balance_handler(call: CallbackQuery, state: FSMContext) -> Non
             codes_content = [c.content for c in codes]
             new_balance = user.balance
             sub_name = str(sub.name)
+            if codes_content:
+                try:
+                    await send_purchase_post(call.bot, sub_name, qty, _fmt(total), "رصيد البوت", user_id, order_id)
+                except Exception as _e:
+                    logger.warning("Failed to post purchase: %s", _e)
     except Exception as e:
         logger.exception("Balance purchase failed: %s", e)
         await call.answer(

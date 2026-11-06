@@ -14,10 +14,11 @@ from sqlalchemy.orm import noload
 from bot.database.main import Database
 from bot.database.models.main import (
     LocalSubscription, LocalSubscriptionOrder, LocalSubscriptionCode,
-    User,
+    PaymentMethod, User,
 )
 from bot.misc import EnvKeys
 from bot.states import LocalBuy, AdminOrder
+from bot.misc.services.updates_channel import send_purchase_post
 
 
 logger = logging.getLogger(__name__)
@@ -128,6 +129,8 @@ async def local_order_approve_handler(call: CallbackQuery, dispatcher=None) -> N
     codes_content: list[str] = []
     order_qty = 0
     _lookup_sub_id = None
+    _pm_id = None
+    _pm_type = ""
 
     try:
         async with Database().session() as session:
@@ -214,6 +217,8 @@ async def local_order_approve_handler(call: CallbackQuery, dispatcher=None) -> N
             total_str = _fmt(order.total_price)
             order_qty = qty
             _lookup_sub_id = sub.id
+            _pm_id = order.payment_method_id
+            _pm_type = order.payment_type
 
     except Exception as e:
         logger.exception("Approve failed: %s", e)
@@ -445,6 +450,21 @@ async def local_order_approve_handler(call: CallbackQuery, dispatcher=None) -> N
         " <b>تم تسليم الأكواد للمشتري</b>",
     ])
     await _replace_caption_or_text(call, new_caption, new_markup=None)
+    try:
+        _pay_name = "تحويل يدوي"
+        if _pm_type == "balance":
+            _pay_name = "رصيد البوت"
+        elif _pm_id:
+            try:
+                async with Database().session() as _s_pm:
+                    _pm_obj = await _s_pm.get(PaymentMethod, _pm_id)
+                    if _pm_obj is not None and getattr(_pm_obj, "name", None):
+                        _pay_name = str(_pm_obj.name)
+            except Exception:
+                pass
+        await send_purchase_post(call.bot, sub_name, order_qty, total_str, _pay_name, buyer_id, order_id)
+    except Exception as _e:
+        logger.warning("Failed to post purchase: %s", _e)
 
 
 # ============================================================
