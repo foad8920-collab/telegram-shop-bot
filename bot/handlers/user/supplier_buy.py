@@ -586,6 +586,7 @@ async def supplier_buy_wallet(call: CallbackQuery, state: FSMContext) -> None:
     unit_price = Decimal(str(data.get("sb_unit_price", "0")))
     total = (unit_price * qty).quantize(Decimal("0.01"))
 
+    supplier_id = int(data.get("sb_supplier_id", 0))
     await state.update_data(sb_payment_method_id=pm.id, sb_payment_method_name=pm.name)
     await state.set_state(SupplierBuy.waiting_wallet_proof)
 
