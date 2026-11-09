@@ -88,6 +88,7 @@ def _compute_selling_price(
     manual_price: Optional[Decimal] = None,
     fixed_profit: Optional[Decimal] = None,
     category_fixed_profits: Optional[dict[str, Decimal]] = None,
+    supplier_margin: Optional[Decimal] = None,
 ) -> Decimal:
     """Compute selling price from cost + pricing rules.
 
@@ -102,7 +103,9 @@ def _compute_selling_price(
         return manual_price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     # Defaults
-    percent = Decimal("30")
+    # Supplier margin is the base percent; a pricing rule overrides it.
+    base_percent = supplier_margin if (supplier_margin is not None and supplier_margin > 0) else Decimal("30")
+    percent = base_percent
     fixed = Decimal("0")
     min_margin = Decimal("5")
     round_to = Decimal("0.01")
@@ -110,7 +113,7 @@ def _compute_selling_price(
     max_price: Optional[Decimal] = None
 
     if rule is not None:
-        percent = _to_decimal(rule.markup_percent, Decimal("30"))
+        percent = _to_decimal(rule.markup_percent, base_percent)
         fixed = _to_decimal(rule.markup_fixed, Decimal("0"))
         min_margin = _to_decimal(rule.min_margin_percent, Decimal("5"))
         round_to = _to_decimal(rule.round_to, Decimal("0.01")) or Decimal("0.01")
@@ -191,6 +194,7 @@ async def sync_supplier(supplier_id: int, *, manual: bool = False, bot=None) -> 
             report["error"] = f"Supplier {supplier_id} not found"
             return report
         is_stackvault = "stackvault" in (supplier.name or "").lower()
+        supplier_margin = _to_decimal(getattr(supplier, "profit_margin", None))
 
         api_url = (supplier.api_url or "").strip()
 
@@ -333,6 +337,7 @@ async def sync_supplier(supplier_id: int, *, manual: bool = False, bot=None) -> 
                 manual_price=manual_price,
                 fixed_profit=product_fixed_profit,
                 category_fixed_profits=category_fixed_profits,
+                supplier_margin=supplier_margin,
             )
 
             # ---- StackVault description detail refresh (every 6h) ----
