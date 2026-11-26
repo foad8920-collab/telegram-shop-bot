@@ -43,6 +43,7 @@ async def _build_welcome_text(user_id: int, first_name: str = "") -> str:
     SEPARATOR = chr(0x2501) * 18    # heavy horizontal line
 
     balance_str = "0.00"
+    balance_extra = ""
     purchases_count = 0
 
     try:
@@ -52,6 +53,15 @@ async def _build_welcome_text(user_id: int, first_name: str = "") -> str:
             )).scalar_one_or_none()
             if user is not None and user.balance is not None:
                 balance_str = f"{user.balance:.2f}"
+                try:
+                    from decimal import Decimal as _wD, ROUND_CEILING as _wCEIL, ROUND_HALF_UP as _wHALF
+                    from bot.database.methods.transactions import get_currency_rates as _wrates_fn
+                    _wrates = await _wrates_fn()
+                    _wyer_v = (_wD(str(user.balance)) * _wD(str(_wrates.get('usd_to_yer') or 535))).quantize(_wD('1'), rounding=_wHALF)
+                    _wsar_v = (_wD(str(_wyer_v)) / _wD(str(_wrates.get('sar_to_yer') or 140))).quantize(_wD('0.01'), rounding=_wCEIL)
+                    balance_extra = NL + f"{_wsar_v} ريال سعودي" + NL + f"{_wyer_v} ريال يمني"
+                except Exception:
+                    pass
 
             purchases_count = await _count_all_purchases(user_id)
     except Exception:
@@ -74,7 +84,7 @@ async def _build_welcome_text(user_id: int, first_name: str = "") -> str:
         SEPARATOR,
         f"{EMOJI_STAR} <b>أهلاً بك، {name}!</b> {EMOJI_STAR}",
         SEPARATOR,
-        f"{EMOJI_DIAMOND} رصيدك: <b>{balance_str}$</b>",
+        f"{EMOJI_DIAMOND} رصيدك: <b>{balance_str}$</b>{balance_extra}",
         f"{EMOJI_GIFT} مشترياتك: <b>{purchases_str}</b>",
         SEPARATOR,
         "",
