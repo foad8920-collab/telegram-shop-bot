@@ -556,13 +556,13 @@ async def profile_callback_handler(call: CallbackQuery, state: FSMContext):
         markup = profile_keyboard(referral, items, cart_count=cart_count)
     # Balance in 3 currencies (USD, SAR, YER) - SAR derived from YER like subscriptions
     try:
-        from decimal import Decimal as _bD, ROUND_CEILING as _bCEIL
+        from decimal import Decimal as _bD, ROUND_CEILING as _bCEIL, ROUND_HALF_UP as _bHALF
         from bot.database.methods.transactions import get_currency_rates as _brates_fn, convert_price as _bconv_fn
         _brates = await _brates_fn()
         _bbal = balance if balance is not None else 0
         _bprices = _bconv_fn(_bbal, _brates)
         _busd = f"${_bprices['usd']}"
-        _byer_v = _bprices['yer']
+        _byer_v = (_bD(str(_bbal)) * _bD(str(_brates.get('usd_to_yer') or 535))).quantize(_bD('1'), rounding=_bHALF)
         _bsar_v = (_bD(str(_byer_v)) / _bD(str(_brates.get('sar_to_yer') or 140))).quantize(_bD('0.01'), rounding=_bCEIL)
         _bsar = f"{_bsar_v} ريال سعودي"
         _byer = f"{_byer_v} ريال يمني"

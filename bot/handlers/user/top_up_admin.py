@@ -53,14 +53,15 @@ async def approve(call: CallbackQuery) -> None:
             await session.commit()
             await invalidate_user_cache(req.user_id)
 
-    # تحديث رسالة المشرف
+    # تحديث رسالة المشرف (الرسالة نصية، فالتعديل يكون على النص لا على التسمية)
     try:
-        await call.message.edit_caption(
-            caption=(call.message.caption or "") + NL + NL + f" <b>تمت الموافقة على {_fmt(req.amount_requested)}</b>",
+        await call.message.edit_text(
+            (call.message.text or "") + NL + NL + f" <b>تمت الموافقة على {_fmt(req.amount_requested)}</b>",
             parse_mode="HTML",
+            reply_markup=None,
         )
     except Exception:
-        pass
+        await call.answer("تمت الموافقة.", show_alert=True)
 
     # إشعار المستخدم
     try:
@@ -101,12 +102,13 @@ async def reject(call: CallbackQuery) -> None:
         await session.commit()
 
     try:
-        await call.message.edit_caption(
-            caption=(call.message.caption or "") + NL + NL + " <b>تم رفض الطلب.</b>",
+        await call.message.edit_text(
+            (call.message.text or "") + NL + NL + " <b>تم رفض الطلب.</b>",
             parse_mode="HTML",
+            reply_markup=None,
         )
     except Exception:
-        pass
+        await call.answer("تم رفض الطلب.", show_alert=True)
 
     try:
         await call.bot.send_message(
@@ -129,6 +131,11 @@ async def edit_start(call: CallbackQuery, state: FSMContext) -> None:
     if call.from_user.id not in _get_admin_ids():
         return
     req_id = int(call.data.split(":")[1])
+    async with Database().session() as session:
+        req = (await session.execute(select(TopUpRequest).where(TopUpRequest.id == req_id))).scalar_one_or_none()
+        if not req or req.status != "pending":
+            await call.answer(" الطلب غير متاح.", show_alert=True)
+            return
     await state.update_data(edit_req_id=req_id)
     await state.set_state(TopUpAdminStates.entering_new_amount)
     await call.message.answer(
