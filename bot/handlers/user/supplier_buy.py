@@ -612,3 +612,151 @@ async def supplier_buy_wallet(call: CallbackQuery, state: FSMContext) -> None:
             ]]))
     except TelegramBadRequest:
         pass
+
+# ============================================================
+#  Step 5: Wallet receipt photo handler (pending + notify admin)
+# ============================================================
+
+@router.message(SupplierBuy.waiting_wallet_proof, F.photo)
+async def supplier_wallet_proof_handler(message: Message, state: FSMContext) -> None:
+    """User sent a receipt photo -> create pending order and notify admins."""
+    data = await state.get_data()
+    supplier_id = data.get("sb_supplier_id")
+    product_id = data.get("sb_product_id")
+    qty = data.get("sb_qty")
+    payment_method_id = data.get("sb_payment_method_id")
+    payment_method_name = data.get("sb_payment_method_name") or "-"
+
+    if not supplier_id or not product_id or not qty or not payment_method_id:
+        await message.answer(" انتهت الجلسة. أعد العملية من البداية.")
+        await state.clear()
+        return
+
+    file_id = message.photo[-1].file_id
+    user_id = message.from_user.id
+
+    try:
+        async with Database().session() as session:
+            product = await session.get(SupplierProduct, int(product_id))
+            if product is None or int(product.supplier_id) != int(supplier_id):
+                await message.answer(" بيانات غير صحيحة.")
+                await state.clear()
+                return
+            supplier = await session.get(Supplier, int(supplier_id))
+
+            unit_price = Decimal(str(product.selling_price or 0)).quantize(Decimal("0.01"))
+            total = (unit_price * int(qty)).quantize(Decimal("0.01"))
+
+            order = SupplierOrder(
+                supplier_id=int(supplier_id),
+                user_id=user_id,
+                product_id=int(product_id),
+                quantity=int(qty),
+                cost_price=product.cost_price,
+                selling_price=unit_price,
+                profit=(unit_price - Decimal(str(product.cost_price or 0))) * int(qty),
+                status="pending",
+                response_data={
+                    "payment_method": "wallet",
+                    "payment_method_id": int(payment_method_id),
+                    "payment_method_name": str(payment_method_name),
+                    "payment_proof_file_id": file_id,
+                    "total": str(total),
+                },
+            )
+            session.add(order)
+            await session.commit()
+            await session.refresh(order)
+
+            order_id = order.id
+            product_name = str(product.name)
+            product_external_id = str(getattr(product, "external_id", "") or "")
+            product_in_local = bool(getattr(product, "show_in_local", False))
+            supplier_name = (supplier.display_name or supplier.name) if supplier else "-"
+            supplier_internal_name = supplier.name if supplier else "-"
+            supplier_icon = supplier.icon_emoji if supplier else ""
+    except Exception as e:
+        logger.exception("Failed to create supplier wallet order: %s", e)
+        await message.answer(" حدث خطأ أثناء إنشاء الطلب. حاول لاحقا.")
+        await state.clear()
+        return
+
+    # Notify admins (same buttons as the balance flow)
+    if product_in_local:
+        supplier_note = "<b>ملاحظة: هذا المنتج منقول الى الاشتراكات المحلية لذلك لن يظهر في قسم الموردين في البوت. اشتره من بوت المورد في تيليجرام كمستخدم عادي ثم ارسل الاشتراك للعميل من هنا.</b>"
+    else:
+        supplier_note = "<b>اشتر المنتج من بوت المورد في تيليجرام كمستخدم عادي ثم ارسل الاشتراك للعميل من هنا.</b>"
+    admin_text = NL.join([
+        f"{supplier_icon} <b>طلب شراء جديد من {supplier_name}</b>",
+        "====================",
+        f"رقم الطلب: <code>#{order_id}</code>",
+        f"العميل: <code>{user_id}</code>",
+        f"المنتج: <b>{product_name}</b>",
+        f"المورد: <b>{supplier_name}</b>",
+        f"اسم المورد الداخلي: <b>{supplier_internal_name}</b> (ID: {supplier_id})",
+        f"المعرف الخارجي: <code>{product_external_id or '-'}</code>",
+        f"الكمية: <b>{qty}</b>",
+        f"الاجمالي: <b>{_fmt(total)}</b>",
+        f"طريقة الدفع: <b>{payment_method_name}</b> (تحويل يدوي - بانتظار مراجعة السند)",
+        "====================",
+        supplier_note,
+    ])
+
+    SUPPLIER_TELEGRAM_BOTS = {1: "stackvault_bot", 2: "Pandora_Digital_bot", 6: "storeBatmanBot"}
+    supplier_telegram_bot = SUPPLIER_TELEGRAM_BOTS.get(int(supplier_id), "")
+    admin_kb_rows: list[list[InlineKeyboardButton]] = []
+    if supplier_telegram_bot:
+        admin_kb_rows.append([InlineKeyboardButton(text=f"فتح بوت {supplier_internal_name} في تيليجرام", url=f"https://t.me/{supplier_telegram_bot}", style="primary")])
+    admin_kb_rows.append([
+        InlineKeyboardButton(
+            text=chr(0x1F4E4) + " إرسال الاشتراك للعميل",
+            callback_data=f"sb_send_content:{order_id}",
+            style="success",
+        ),
+    ])
+    admin_kb_rows.append([
+        InlineKeyboardButton(
+            text=chr(0x274C) + " رفض الطلب",
+            callback_data=f"sb_reject:{order_id}",
+            style="danger",
+        ),
+    ])
+    admin_markup = InlineKeyboardMarkup(inline_keyboard=admin_kb_rows)
+
+    bot: Bot = message.bot
+    for admin_id in _get_admin_ids():
+        try:
+            await bot.send_photo(
+                chat_id=admin_id,
+                photo=file_id,
+                caption=admin_text,
+                parse_mode="HTML",
+                reply_markup=admin_markup,
+            )
+        except Exception as e:
+            logger.warning("Failed to notify admin %s: %s", admin_id, e)
+
+    # Confirm to user
+    await message.answer(
+        NL.join([
+            " <b>تم إرسال طلبك بنجاح!</b>",
+            "",
+            f" المنتج: <b>{product_name}</b>",
+            f" الكمية: <b>{qty}</b>",
+            f" الاجمالي: <b>{_fmt(total)}</b>",
+            f" رقم الطلب: <code>#{order_id}</code>",
+            "",
+            " <i>سيتم مراجعة الحوالة ثم ارسال تفاصيل المنتج اليك قريبا.</i>",
+        ]),
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=" رجوع للمتجر", callback_data="shop", style="primary")],
+        ]),
+    )
+    await state.clear()
+
+
+@router.message(SupplierBuy.waiting_wallet_proof)
+async def supplier_wallet_proof_wrong_type(message: Message, state: FSMContext) -> None:
+    """User sent text instead of photo."""
+    await message.answer(" الرجاء إرسال <b>صورة سند الحوالة</b> (وليس نصا).", parse_mode="HTML")
