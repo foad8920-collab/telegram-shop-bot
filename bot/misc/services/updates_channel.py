@@ -5,10 +5,11 @@ sync or an admin action can never crash because the channel is unavailable.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from urllib.parse import urlparse
 
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 
 from bot.misc import EnvKeys
 
@@ -51,6 +52,19 @@ async def send_update(bot, text: str, reply_markup=None) -> bool:
     try:
         await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML", reply_markup=reply_markup)
         return True
+    except TelegramRetryAfter as e:
+        # Flood control: wait the seconds Telegram asks for, then retry once only.
+        wait = int(getattr(e, "retry_after", 0) or 0)
+        logger.warning("Updates channel flood control, retry after %ss", wait)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        try:
+            await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML", reply_markup=reply_markup)
+            logger.info("Updates channel post succeeded on retry")
+            return True
+        except Exception as e2:
+            logger.warning("Failed to post to updates channel on retry: %s", e2)
+            return False
     except (TelegramBadRequest, TelegramForbiddenError) as e:
         logger.warning("Failed to post to updates channel: %s", e)
         return False
