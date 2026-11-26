@@ -554,15 +554,18 @@ async def profile_callback_handler(call: CallbackQuery, state: FSMContext):
         from bot.logger_mesh import logger as _logger
         _logger.warning("profile_keyboard_async failed: %s", _e)
         markup = profile_keyboard(referral, items, cart_count=cart_count)
-    # Balance in 3 currencies (USD, SAR, YER) - same convert_price as subscription display
+    # Balance in 3 currencies (USD, SAR, YER) - SAR derived from YER like subscriptions
     try:
+        from decimal import Decimal as _bD, ROUND_CEILING as _bCEIL
         from bot.database.methods.transactions import get_currency_rates as _brates_fn, convert_price as _bconv_fn
         _brates = await _brates_fn()
         _bbal = balance if balance is not None else 0
         _bprices = _bconv_fn(_bbal, _brates)
         _busd = f"${_bprices['usd']}"
-        _bsar = f"{_bprices['sar']} ريال سعودي"
-        _byer = f"{_bprices['yer']} ريال يمني"
+        _byer_v = _bprices['yer']
+        _bsar_v = (_bD(str(_byer_v)) / _bD(str(_brates.get('sar_to_yer') or 140))).quantize(_bD('0.01'), rounding=_bCEIL)
+        _bsar = f"{_bsar_v} ريال سعودي"
+        _byer = f"{_byer_v} ريال يمني"
     except Exception:
         _busd = f"${balance if balance is not None else 0}"
         _bsar = None
