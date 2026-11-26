@@ -23,6 +23,7 @@ async def main_menu(role: int, channel: str | None = None, helper: str | None = 
 
     kb = InlineKeyboardBuilder()
 
+    rest = []
     for btn in buttons:
         if btn.callback_data == "console" and not Permission.has_any_admin_perm(role):
             continue
@@ -39,8 +40,15 @@ async def main_menu(role: int, channel: str | None = None, helper: str | None = 
         if btn.icon_custom_emoji_id:
             btn_kwargs["icon_custom_emoji_id"] = btn.icon_custom_emoji_id
 
-        # One button per row (full width)
-        kb.row(InlineKeyboardButton(**btn_kwargs))
+        if btn.callback_data == "shop":
+            # The store is the main action: full-width row on its own.
+            kb.row(InlineKeyboardButton(**btn_kwargs))
+        else:
+            rest.append(InlineKeyboardButton(**btn_kwargs))
+
+    # Two buttons per row; a leftover single button takes a full-width row.
+    for i in range(0, len(rest), 2):
+        kb.row(*rest[i:i + 2])
 
     if channel:
         kb.row(InlineKeyboardButton(

@@ -53,10 +53,7 @@ async def _build_welcome_text(user_id: int, first_name: str = "") -> str:
             if user is not None and user.balance is not None:
                 balance_str = f"{user.balance:.2f}"
 
-            cnt_result = await session.execute(
-                _select(_func.count(_Bought.id)).where(_Bought.buyer_id == user_id)
-            )
-            purchases_count = int(cnt_result.scalar() or 0)
+            purchases_count = await _count_all_purchases(user_id)
     except Exception:
         pass
 
