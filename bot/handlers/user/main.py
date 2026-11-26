@@ -59,7 +59,7 @@ async def _build_welcome_text(user_id: int, first_name: str = "") -> str:
                     _wrates = await _wrates_fn()
                     _wyer_v = (_wD(str(user.balance)) * _wD(str(_wrates.get('usd_to_yer') or 535))).quantize(_wD('1'), rounding=_wHALF)
                     _wsar_v = (_wD(str(_wyer_v)) / _wD(str(_wrates.get('sar_to_yer') or 140))).quantize(_wD('0.01'), rounding=_wCEIL)
-                    balance_extra = NL + f"{_wsar_v} ريال سعودي" + NL + f"{_wyer_v} ريال يمني"
+                    balance_extra = NL + f"\U0001F1F8\U0001F1E6 {_wsar_v} ريال سعودي" + NL + f"\U0001F1FE\U0001F1EA {_wyer_v} ريال يمني"
                 except Exception:
                     pass
 
@@ -84,7 +84,7 @@ async def _build_welcome_text(user_id: int, first_name: str = "") -> str:
         SEPARATOR,
         f"{EMOJI_STAR} <b>أهلاً بك، {name}!</b> {EMOJI_STAR}",
         SEPARATOR,
-        f"{EMOJI_DIAMOND} رصيدك: <b>{balance_str}$</b>{balance_extra}",
+        f"{EMOJI_DIAMOND} رصيدك: <b>\U0001F1FA\U0001F1F8 {balance_str}$</b>{balance_extra}",
         f"{EMOJI_GIFT} مشترياتك: <b>{purchases_str}</b>",
         SEPARATOR,
         "",
@@ -571,13 +571,13 @@ async def profile_callback_handler(call: CallbackQuery, state: FSMContext):
         _busd = f"${_bprices['usd']}"
         _byer_v = (_bD(str(_bbal)) * _bD(str(_brates.get('usd_to_yer') or 535))).quantize(_bD('1'), rounding=_bHALF)
         _bsar_v = (_bD(str(_byer_v)) / _bD(str(_brates.get('sar_to_yer') or 140))).quantize(_bD('0.01'), rounding=_bCEIL)
-        _bsar = f"{_bsar_v} ريال سعودي"
-        _byer = f"{_byer_v} ريال يمني"
+        _bsar = f"\U0001F1F8\U0001F1E6 {_bsar_v} ريال سعودي"
+        _byer = f"\U0001F1FE\U0001F1EA {_byer_v} ريال يمني"
     except Exception:
         _busd = f"${balance if balance is not None else 0}"
         _bsar = None
         _byer = None
-    _balance_lines = f" الرصيد: <b>{_busd}</b>" + chr(10)
+    _balance_lines = f" الرصيد: <b>\U0001F1FA\U0001F1F8 {_busd}</b>" + chr(10)
     if _bsar:
         _balance_lines += f" الرصيد: <b>{_bsar}</b>" + chr(10)
     if _byer:
