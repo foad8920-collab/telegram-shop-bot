@@ -27,9 +27,15 @@ h2{font-size:18px;margin:26px 0 12px;border-bottom:1px solid var(--card-border);
 .chips{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 4px}
 .chip{padding:6px 12px;border:1px solid var(--card-border);border-radius:20px;color:var(--text);font-size:14px;background:transparent;font-family:inherit;cursor:pointer}
 .chip.active{background:var(--accent-dark);border-color:var(--accent-dark);color:#fff}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px}
+.grid{display:grid;grid-template-columns:repeat(1,1fr);gap:14px}
+@media(min-width:480px){.grid{grid-template-columns:repeat(2,1fr)}}
+@media(min-width:768px){.grid{grid-template-columns:repeat(3,1fr)}}
+@media(min-width:1024px){.grid{grid-template-columns:repeat(4,1fr)}}
+@media(min-width:1280px){.grid{grid-template-columns:repeat(5,1fr)}}
 .card{position:relative;display:block;background:var(--card);border:1px solid var(--card-border);border-radius:12px;padding:14px;color:var(--text);overflow:hidden;transition:transform .25s ease,box-shadow .25s ease,border-color .25s ease}
-.card:hover{border-color:var(--accent);transform:translateY(-3px);box-shadow:0 8px 24px rgba(0,0,0,.35)}
+.card::before{content:"";position:absolute;top:0;right:0;left:0;height:2px;background:linear-gradient(90deg,transparent,rgba(45,212,191,.6),rgba(47,140,255,.6),transparent);opacity:.5}
+.card:hover::before{opacity:1}
+.card:hover{border-color:var(--accent);transform:translateY(-3px);box-shadow:0 8px 24px rgba(0,0,0,.35),0 0 0 1px rgba(47,140,255,.30),0 0 28px rgba(45,212,191,.18)}
 .card.out{background:var(--out-bg);border-color:var(--out-border)}
 .card-link{display:block;color:var(--text)}
 .ribbon{position:absolute;top:0;right:0;background:var(--gold);color:#241a00;font-size:12px;font-weight:700;padding:3px 10px;border-radius:0 0 0 8px}
@@ -38,7 +44,6 @@ h2{font-size:18px;margin:26px 0 12px;border-bottom:1px solid var(--card-border);
 .thumb-text{display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:700;color:var(--accent);background:#0e1828}
 .card-name{display:block;font-weight:700;font-size:16px;line-height:1.5;margin-bottom:4px}
 .supplier,.category{display:block;color:var(--muted);font-size:13px}
-.desc{display:block;color:var(--muted);font-size:13px;line-height:1.6;margin:6px 0}
 .price{display:block;margin:10px 0 8px}
 .price .usd{display:block;font-size:19px;color:#fff}
 .price .sar,.price .yer{display:block;font-size:13px;color:var(--muted)}
@@ -65,9 +70,13 @@ body.favs-only .card:not(.fav-on){display:none}
 .more{display:inline-block;margin:10px 0 4px;font-size:14px}
 .pager{display:flex;gap:12px;align-items:center;justify-content:center;margin:22px 0}
 .detail{position:relative;background:var(--card);border:1px solid var(--card-border);border-radius:12px;padding:20px;max-width:760px;transition:transform .25s ease,box-shadow .25s ease,border-color .25s ease}
+.detail::before{content:"";position:absolute;top:0;right:0;left:0;height:2px;background:linear-gradient(90deg,transparent,rgba(45,212,191,.6),rgba(47,140,255,.6),transparent);opacity:.5}
 .detail.out{background:var(--out-bg);border-color:var(--out-border)}
 .detail h1{margin-top:0}
-.detail .desc{font-size:15px;line-height:1.9;color:var(--text)}
+.desc-section{margin:16px 0}
+.desc-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+.desc-head h2{margin:0;border-bottom:0;padding-bottom:0}
+.desc-body{white-space:pre-line;font-size:15px;line-height:1.9;color:var(--text);margin:0}
 .price-box{background:#0e1828;border:1px solid var(--card-border);border-radius:10px;padding:14px;margin:14px 0;line-height:2}
 .price-box .usd{font-size:22px;font-weight:700;color:#fff}
 .stock-line{display:flex;gap:10px;align-items:center;flex-wrap:wrap}

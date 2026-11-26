@@ -10,7 +10,6 @@
   {% if item.supplier_name %}<p class="supplier">{{ item.supplier_name }}</p>{% endif %}
   {% if item.category %}<p class="category">{{ item.category }}</p>{% endif %}
   {% if item.image_url %}<img class="thumb" src="{{ item.image_url }}" alt="" loading="lazy">{% endif %}
-  <p class="desc">{{ item.description }}</p>
   <div class="price-box">
     {% if item.prices.usd %}<div class="usd">{{ item.prices.usd }}</div>
     {% if item.prices.sar %}<div>{{ item.prices.sar }}</div>{% endif %}
@@ -21,15 +20,20 @@
     <span class="badge badge-{{ item.stock.state }}">{{ item.stock.badge }}</span>
     {% if item.is_new %}<span class="badge badge-new">جديد</span>{% endif %}
     {% if item.delivery %}<span class="tag">{{ item.delivery }}</span>{% endif %}
-    <span>{{ item.stock.stock_text }}</span>
   </p>
   {% if item.last_synced %}<p class="synced">آخر تحديث: {{ item.last_synced }}</p>{% elif item.kind == 'supplier' %}<p class="synced">آخر تحديث: لم تتم المزامنة بعد</p>{% endif %}
+  <section class="desc-section">
+    <div class="desc-head">
+      <h2>عرض المنتج</h2>
+      <button type="button" class="btn ghost" data-copy="{{ item.description }}">نسخ الوصف</button>
+    </div>
+    <p class="desc-body">{{ item.description }}</p>
+  </section>
   {% if item.stock.state == 'out' %}
   <p class="out-note">نفدت الكمية من هذا المنتج حالياً. سيعود للتوفر بعد المزامنة التالية مع المورد أو بعد إضافة أكواد جديدة.</p>
   {% endif %}
   <p class="actions">
     <button type="button" class="btn ghost" data-copy="{{ item.share_url }}">نسخ رابط المنتج</button>
-    <button type="button" class="btn ghost" data-copy="{{ item.description }}">نسخ الوصف</button>
   </p>
   <p class="soon">الشراء من الموقع قادم قريباً.</p>
   <p><a class="btn" href="https://t.me/YemenSubscriptionsBot">شراء عبر بوت التليجرام</a></p>

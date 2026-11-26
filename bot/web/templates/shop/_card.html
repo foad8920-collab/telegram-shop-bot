@@ -6,7 +6,6 @@
     <span class="card-name">{{ p.name }}</span>
     {% if p.supplier_name %}<span class="supplier">{{ p.supplier_name }}</span>{% endif %}
     {% if p.category %}<span class="category">{{ p.category }}</span>{% endif %}
-    {% if p.description %}<span class="desc">{{ p.description }}</span>{% endif %}
     <span class="price">
       {% if p.prices.usd %}<b class="usd">{{ p.prices.usd }}</b>
       {% if p.prices.sar %}<span class="sar">{{ p.prices.sar }}</span>{% endif %}
