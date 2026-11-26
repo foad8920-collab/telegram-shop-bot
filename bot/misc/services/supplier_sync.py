@@ -213,9 +213,31 @@ async def sync_supplier(supplier_id: int, *, manual: bool = False, bot=None) -> 
         report["error"] = str(e)
         # Record failed sync
         await _record_sync_failure(supplier_id, e)
+        # Auto-hide: after 2 consecutive list-fetch failures, hide products + alert.
+        await _hide_supplier_products(supplier_id, bot, str(e))
         return report
 
     if not products:
+        # Empty list: outage if the supplier previously had products.
+        _had_products = False
+        try:
+            async with Database().session() as _s:
+                _row = (await _s.execute(
+                    select(SupplierProduct.id).where(
+                        SupplierProduct.supplier_id == supplier_id
+                    ).limit(1)
+                )).first()
+                _had_products = _row is not None
+        except Exception:
+            _had_products = False
+        if _had_products:
+            _empty_err = ValueError("API returned no products while supplier had products")
+            logger.warning("Empty product list for supplier %s while it had products", supplier_id)
+            report["status"] = "failed"
+            report["error"] = str(_empty_err)
+            await _record_sync_failure(supplier_id, _empty_err)
+            await _hide_supplier_products(supplier_id, bot, str(_empty_err))
+            return report
         report["status"] = "success"
         report["error"] = "No products returned"
         await _record_sync_success(supplier_id, report)
@@ -254,6 +276,7 @@ async def sync_supplier(supplier_id: int, *, manual: bool = False, bot=None) -> 
 
     # ---- Process products ----
     now = datetime.now(timezone.utc)
+    was_failing = False
     detail_fetched_count = 0
     detail_rate_limited = False
     seen_external_ids: set[str] = set()
@@ -439,9 +462,13 @@ async def sync_supplier(supplier_id: int, *, manual: bool = False, bot=None) -> 
             supplier.last_sync_status = "success"
             supplier.last_sync_error = None
             supplier.last_sync_product_count = report["total"]
+            was_failing = (supplier.sync_errors_count or 0) >= 2
             supplier.sync_errors_count = 0
 
         await session.commit()
+
+    if was_failing:
+        await _restore_supplier_products(supplier_id, bot)
 
     if events:
         try:
@@ -510,6 +537,109 @@ async def _fetch_products(supplier: Supplier) -> list[dict]:
 
 # ============================================================
 #  Sync logging
+def _supplier_yemen_time() -> tuple:
+    """Return (time, date) strings in Yemen time (UTC+3, 12-hour)."""
+    from datetime import timedelta as _td
+    now = datetime.now(timezone.utc) + _td(hours=3)
+    hour12 = now.hour % 12 or 12
+    suffix = "صباحا" if now.hour < 12 else "مساء"
+    time_s = f"{hour12}:{now.minute:02d}:{now.second:02d} {suffix}"
+    date_s = now.strftime("%d/%m/%Y")
+    return time_s, date_s
+
+
+async def _send_supplier_monitoring_alert(bot, text: str) -> bool:
+    """Send a supplier alert to the private monitoring channel. Never raises."""
+    try:
+        from bot.misc.services.monitoring_channel import send_monitoring as _send_mon
+        if bot is not None:
+            return await _send_mon(bot, text)
+        from aiogram import Bot as _Bot
+        from bot.misc import EnvKeys as _EnvKeys
+        async with _Bot(token=_EnvKeys.TOKEN) as _tmp_bot:
+            return await _send_mon(_tmp_bot, text)
+    except Exception as e:
+        logger.warning("Supplier monitoring alert failed: %s", e)
+        return False
+
+
+async def _hide_supplier_products(supplier_id: int, bot, error_text: str) -> int:
+    """Hide a stopped supplier's visible products after 2 consecutive failures.
+
+    Only runs when sync_errors_count >= 2. Alerts the monitoring channel when
+    the supplier first reaches 2 failures, or when products were actually hidden.
+    Returns the number of products hidden.
+    """
+    try:
+        async with Database().session() as session:
+            supplier = await session.get(Supplier, supplier_id)
+            if supplier is None:
+                return 0
+            err_count = supplier.sync_errors_count or 0
+            if err_count < 2:
+                return 0
+            name = supplier.name or f"Supplier {supplier_id}"
+            rows = (await session.execute(
+                select(SupplierProduct).where(
+                    SupplierProduct.supplier_id == supplier_id,
+                    SupplierProduct.is_visible == True,  # noqa: E712
+                )
+            )).scalars().all()
+            for p in rows:
+                p.is_visible = False
+            hidden = len(rows)
+            await session.commit()
+    except Exception as e:
+        logger.warning("Failed to hide supplier %s products: %s", supplier_id, e)
+        return 0
+    if hidden > 0 or err_count == 2:
+        time_s, date_s = _supplier_yemen_time()
+        text = chr(10).join([
+            "\U000026A0\uFE0F توقف مورد عن العمل",
+            f"المورد: {name} (ID {supplier_id})",
+            f"الحالة: فشلت المزامنة مرتين متتاليتين وتم إخفاء {hidden} منتج من المتجر تلقائيا",
+            f"آخر خطأ: {error_text}",
+            f"\U0001F550 الوقت: {time_s}",
+            f"\U0001F4C5 التاريخ: {date_s}",
+        ])
+        await _send_supplier_monitoring_alert(bot, text)
+    return hidden
+
+
+async def _restore_supplier_products(supplier_id: int, bot) -> int:
+    """Restore a recovered supplier's hidden products and alert. Returns count."""
+    try:
+        async with Database().session() as session:
+            supplier = await session.get(Supplier, supplier_id)
+            if supplier is None:
+                return 0
+            name = supplier.name or f"Supplier {supplier_id}"
+            rows = (await session.execute(
+                select(SupplierProduct).where(
+                    SupplierProduct.supplier_id == supplier_id,
+                    SupplierProduct.is_visible == False,  # noqa: E712
+                )
+            )).scalars().all()
+            for p in rows:
+                p.is_visible = True
+            restored = len(rows)
+            await session.commit()
+    except Exception as e:
+        logger.warning("Failed to restore supplier %s products: %s", supplier_id, e)
+        return 0
+    if restored > 0:
+        time_s, date_s = _supplier_yemen_time()
+        text = chr(10).join([
+            "\U00002705 عاد مورد للعمل",
+            f"المورد: {name} (ID {supplier_id})",
+            f"الحالة: نجحت المزامنة وتمت إعادة إظهار {restored} منتج في المتجر",
+            f"\U0001F550 الوقت: {time_s}",
+            f"\U0001F4C5 التاريخ: {date_s}",
+        ])
+        await _send_supplier_monitoring_alert(bot, text)
+    return restored
+
+
 async def _record_sync_success(supplier_id: int, report: dict) -> None:
     """Insert a supplier_sync_logs row (success)."""
     try:
