@@ -1249,3 +1249,89 @@ async def format_price_arabic_async(usd_price) -> str:
     """نسخة async تجلب أسعار الصرف من DB تلقائيًا."""
     rates = await get_currency_rates()
     return format_price_arabic(usd_price, rates)
+
+def parse_amount_with_currency(text) -> tuple:
+    """Parse an admin-entered amount with an optional currency.
+
+    Bare number = YER (the store default). Accepts YER/USD/SAR in Arabic
+    or Latin, e.g. '1000', '1000 YER', '1000 ريال يمني', '10 USD',
+    '10 دولار', '50 SAR', '50 سعودي', '$10'. Arabic-Indic digits are
+    accepted. Returns (Decimal amount, 'YER' | 'USD' | 'SAR').
+    Raises ValueError on invalid input.
+    """
+    import re
+    from decimal import Decimal, InvalidOperation
+
+    s = (text or "").strip()
+    s = s.translate(str.maketrans("\u0660\u0661\u0662\u0663\u0664\u0665\u0666\u0667\u0668\u0669", "0123456789"))
+    s = s.replace("\u066b", ".")
+    if not s:
+        raise ValueError("empty amount")
+    if s.startswith("$"):
+        cur = "USD"
+        num_part = s[1:].strip()
+        rest = ""
+    else:
+        m = re.match(r"^([0-9][0-9,]*(\.[0-9]+)?)\s*(.*)$", s)
+        if not m:
+            raise ValueError("bad amount")
+        num_part, rest = m.group(1), (m.group(3) or "").strip().lower()
+        if not rest:
+            cur = "YER"
+        else:
+            r = rest.replace(" ", "")
+            if r in ("yer", "يمني", "رياليمني", "ريال", "ر.ي"):
+                cur = "YER"
+            elif r in ("usd", "دولار", "دولارأمريكي", "$"):
+                cur = "USD"
+            elif r in ("sar", "سعودي", "ريالسعودي", "ر.س"):
+                cur = "SAR"
+            else:
+                raise ValueError("unknown currency")
+    if "," in num_part and "." in num_part:
+        num_part = num_part.replace(",", "")
+    elif num_part.count(",") > 1:
+        num_part = num_part.replace(",", "")
+    elif "," in num_part:
+        num_part = num_part.replace(",", ".")
+    try:
+        amount = Decimal(num_part)
+    except InvalidOperation:
+        raise ValueError("bad amount")
+    if amount <= 0:
+        raise ValueError("bad amount")
+    return amount, cur
+
+
+def convert_to_usd(amount, currency, rates: dict) -> Decimal:
+    """Convert an amount in YER/USD/SAR to USD (the stored unit).
+
+    YER -> USD: divide by usd_to_yer, ROUND_CEILING to 2dp (customer-favoured,
+    same rule as subscription prices). SAR -> USD: via YER (x sar_to_yer,
+    then / usd_to_yer, ceiling). USD passes through (2dp).
+    """
+    from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
+
+    amt = Decimal(str(amount))
+    cur = (currency or "YER").upper()
+    usd_to_yer = Decimal(str(rates.get("usd_to_yer") or 535))
+    sar_to_yer = Decimal(str(rates.get("sar_to_yer") or 140))
+    if cur == "USD":
+        return amt.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    if cur == "SAR":
+        amt = amt * sar_to_yer
+    return (amt / usd_to_yer).quantize(Decimal("0.01"), rounding=ROUND_CEILING)
+
+
+def format_amount_ar(amount, currency) -> str:
+    """Arabic label for an entered amount, e.g. '1000 ريال يمني'."""
+    from decimal import Decimal
+
+    cur = (currency or "YER").upper()
+    n = Decimal(str(amount)).normalize()
+    ns = format(n, "f")
+    if cur == "USD":
+        return f"{ns} دولار"
+    if cur == "SAR":
+        return f"{ns} ريال سعودي"
+    return f"{ns} ريال يمني"

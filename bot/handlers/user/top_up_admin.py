@@ -132,7 +132,7 @@ async def edit_start(call: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(edit_req_id=req_id)
     await state.set_state(TopUpAdminStates.entering_new_amount)
     await call.message.answer(
-        f" أرسل <b>المبلغ الفعلي</b> الذي وصل (رقم فقط):",
+        f" أرسل <b>المبلغ الفعلي</b> الذي وصل (الرقم وحده = ريال يمني، مثال: 1000 أو 10 USD أو 50 SAR):",
         parse_mode="HTML",
     )
 
@@ -141,13 +141,20 @@ async def edit_start(call: CallbackQuery, state: FSMContext) -> None:
 async def edit_confirm(message: Message, state: FSMContext) -> None:
     if message.from_user.id not in _get_admin_ids():
         return
-    text = (message.text or "").strip().replace(",", ".")
     try:
-        new_amount = Decimal(text)
+        from bot.database.methods.transactions import (
+            parse_amount_with_currency as _parse_amt,
+            convert_to_usd as _to_usd,
+            format_amount_ar as _fmt_amt,
+            get_currency_rates as _rates_fn,
+        )
+        _rates = await _rates_fn()
+        _entered, _cur = _parse_amt(message.text or "")
+        new_amount = _to_usd(_entered, _cur, _rates)
         if new_amount <= 0:
             raise ValueError
     except Exception:
-        await message.answer(" رقم غير صالح.")
+        await message.answer(" رقم غير صالح. مثال: 1000 أو 10 USD أو 50 SAR.")
         return
 
     data = await state.get_data()
@@ -170,7 +177,7 @@ async def edit_confirm(message: Message, state: FSMContext) -> None:
             await session.commit()
             await invalidate_user_cache(req.user_id)
 
-    await message.answer(f" <b>تمت الموافقة على {_fmt(new_amount)} وإضافتها للرصيد.</b>", parse_mode="HTML")
+    await message.answer(f" <b>تمت الموافقة على {_fmt_amt(_entered, _cur)} (= {_fmt(new_amount)}) وإضافتها للرصيد.</b>", parse_mode="HTML")
 
     try:
         await message.bot.send_message(
@@ -178,7 +185,7 @@ async def edit_confirm(message: Message, state: FSMContext) -> None:
             text=NL.join([
                 " <b>تم شحن رصيدك بنجاح!</b>",
                 "",
-                f" المبلغ: <b>{_fmt(new_amount)}</b>",
+                f" المبلغ: <b>{_fmt_amt(_entered, _cur)} ({_fmt(new_amount)})</b>",
                 f" رقم الطلب: <code>{req_id}</code>",
             ]),
             parse_mode="HTML",
