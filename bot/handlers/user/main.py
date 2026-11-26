@@ -554,10 +554,28 @@ async def profile_callback_handler(call: CallbackQuery, state: FSMContext):
         from bot.logger_mesh import logger as _logger
         _logger.warning("profile_keyboard_async failed: %s", _e)
         markup = profile_keyboard(referral, items, cart_count=cart_count)
+    # Balance in 3 currencies (USD, SAR, YER) - same convert_price as subscription display
+    try:
+        from bot.database.methods.transactions import get_currency_rates as _brates_fn, convert_price as _bconv_fn
+        _brates = await _brates_fn()
+        _bbal = balance if balance is not None else 0
+        _bprices = _bconv_fn(_bbal, _brates)
+        _busd = f"${_bprices['usd']}"
+        _bsar = f"{_bprices['sar']} ريال سعودي"
+        _byer = f"{_bprices['yer']} ريال يمني"
+    except Exception:
+        _busd = f"${balance if balance is not None else 0}"
+        _bsar = None
+        _byer = None
+    _balance_lines = f" الرصيد: <b>{_busd}</b>" + chr(10)
+    if _bsar:
+        _balance_lines += f" الرصيد: <b>{_bsar}</b>" + chr(10)
+    if _byer:
+        _balance_lines += f" الرصيد: <b>{_byer}</b>" + chr(10)
     text = (
         f"{localize('profile.caption', name=_esc(tg_user.first_name or ''), id=user_id)}\n"
         f"{localize('profile.id', id=user_id)}\n"
-        f"{localize('profile.balance', amount=balance, currency=EnvKeys.PAY_CURRENCY)}\n"
+        f"{_balance_lines}"
 
         f"{localize('profile.purchased_count', count=items)}"
     )
