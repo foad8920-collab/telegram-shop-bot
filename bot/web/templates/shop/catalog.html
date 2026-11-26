@@ -1,0 +1,75 @@
+{% extends "shop/base.html" %}
+{% block content %}
+<h1>المتجر</h1>
+<form class="search" method="get" action="/shop">
+  <input type="search" name="q" value="{{ q or '' }}" placeholder="ابحث عن منتج" maxlength="50">
+  {% if categories %}
+  <select name="category" aria-label="الفئة">
+    <option value="">كل الفئات</option>
+    {% for c in categories %}
+    <option value="{{ c }}"{% if category_filter == c %} selected{% endif %}>{{ c }}</option>
+    {% endfor %}
+  </select>
+  {% endif %}
+  <select name="sort" aria-label="الترتيب">
+    <option value=""{% if not sort %} selected{% endif %}>الترتيب الافتراضي</option>
+    <option value="price_asc"{% if sort == 'price_asc' %} selected{% endif %}>السعر: من الأقل</option>
+    <option value="price_desc"{% if sort == 'price_desc' %} selected{% endif %}>السعر: من الأعلى</option>
+    <option value="name"{% if sort == 'name' %} selected{% endif %}>الاسم</option>
+  </select>
+  <label><input type="checkbox" name="available" value="1" {% if available_only %}checked{% endif %}> المتوفر فقط</label>
+  <button type="button" class="chip" id="favFilter">المفضلة</button>
+  {% if supplier_filter %}<input type="hidden" name="supplier" value="{{ supplier_filter }}">{% endif %}
+  {% if section %}<input type="hidden" name="section" value="{{ section }}">{% endif %}
+  <button type="submit">بحث</button>
+</form>
+{% if suppliers %}
+<div class="chips">
+  <a class="chip{% if not supplier_filter and not section %} active{% endif %}" href="/shop">كل المنتجات</a>
+  {% for s in suppliers %}
+  <a class="chip{% if supplier_filter == s.id %} active{% endif %}" href="/shop?supplier={{ s.id }}">{{ s.name }}</a>
+  {% endfor %}
+</div>
+{% endif %}
+{% if search_error %}<p class="error">{{ search_error }}</p>{% endif %}
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+{% if flat %}
+<section class="group">
+  <h2>النتائج{% if pagination %} ({{ pagination.total }}){% endif %}</h2>
+  <div class="grid">
+    {% for p in flat_items %}{% include "shop/_card.html" %}{% endfor %}
+  </div>
+  {% if pagination and pagination.pages > 1 %}
+  <nav class="pager">
+    {% if pagination.prev_url %}<a class="btn" href="{{ pagination.prev_url }}"> السابق</a>{% endif %}
+    <span>صفحة {{ pagination.page }} من {{ pagination.pages }}</span>
+    {% if pagination.next_url %}<a class="btn" href="{{ pagination.next_url }}">التالي </a>{% endif %}
+  </nav>
+  {% endif %}
+  {% if not flat_items %}<p class="empty">لا توجد منتجات مطابقة حالياً.</p>{% endif %}
+</section>
+{% else %}
+{% if local_items %}
+<section class="group">
+  <h2>الاشتراكات المحلية</h2>
+  <div class="grid">
+    {% for p in local_items %}{% include "shop/_card.html" %}{% endfor %}
+  </div>
+  {% if has_more_local %}<a class="more" href="/shop?section=local">عرض كل الاشتراكات المحلية </a>{% endif %}
+</section>
+{% endif %}
+{% for group in supplier_groups %}
+<section class="group">
+  <h2>{{ group.supplier.name }}</h2>
+  <div class="grid">
+    {% for p in group.products %}{% include "shop/_card.html" %}{% endfor %}
+  </div>
+  {% if group.has_more %}<a class="more" href="/shop?supplier={{ group.supplier.id }}">عرض كل منتجات {{ group.supplier.name }} </a>{% endif %}
+</section>
+{% endfor %}
+{% if not local_items and not supplier_groups %}
+<p class="empty">لا توجد منتجات مطابقة حالياً.</p>
+{% endif %}
+{% endif %}
+<p class="empty" id="noFavs" hidden>لا توجد منتجات مفضلة بعد. اضغط القلب على أي بطاقة لحفظها هنا.</p>
+{% endblock %}

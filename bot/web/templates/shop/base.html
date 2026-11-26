@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title or "متجر منصة اليمن الإلكترونية" }}</title>
+<script>try{var t=localStorage.getItem('yemen-shop-theme');if(t){document.documentElement.setAttribute('data-theme',t);}}catch(e){}</script>
+<style>
+:root{--bg:#0a0f1a;--card:#131f33;--card-border:#1e2c47;--text:#e8eef7;--muted:#8fa3bf;--accent:#2f8cff;--accent-dark:#1f7ae0;--green:#1d7a3d;--red:#e5484d;--gold:#d4a017;--out-bg:#3d1b22;--out-border:#5c2430}
+[data-theme="light"]{--bg:#eef2f8;--card:#ffffff;--card-border:#d8e0ee;--text:#16233a;--muted:#5a6b85;--accent:#1f7ae0;--accent-dark:#1f7ae0;--green:#1d7a3d;--red:#d92d20;--gold:#b98a0b;--out-bg:#fdecec;--out-border:#f0b6ba}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,"Segoe UI",Tahoma,Arial,sans-serif}
+a{color:var(--accent);text-decoration:none}
+.header{display:flex;align-items:center;gap:10px;padding:16px 20px;border-bottom:1px solid var(--card-border);flex-wrap:wrap}
+.brand{font-size:20px;font-weight:700;color:var(--text)}
+.sub{color:var(--muted);font-size:13px}
+.theme-btn{margin-inline-start:auto;padding:8px 14px;border-radius:20px;border:1px solid var(--card-border);background:var(--card);color:var(--text);cursor:pointer;font-size:14px}
+.wrap{max-width:1100px;margin:0 auto;padding:16px 20px 40px}
+.footer{max-width:1100px;margin:0 auto;padding:0 20px 30px;color:var(--muted);font-size:13px;line-height:1.8}
+h1{font-size:22px;margin:8px 0 14px}
+h2{font-size:18px;margin:26px 0 12px;border-bottom:1px solid var(--card-border);padding-bottom:6px}
+.search{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.search input[type=search]{flex:1;min-width:200px;padding:10px 12px;border-radius:8px;border:1px solid var(--card-border);background:#0e1828;color:var(--text);font-size:15px}
+.search select{padding:10px;border-radius:8px;border:1px solid var(--card-border);background:#0e1828;color:var(--text);font-size:15px}
+.search button{padding:10px 18px;border-radius:8px;border:0;background:var(--accent-dark);color:#fff;font-size:15px;cursor:pointer}
+.search label{color:var(--muted);font-size:14px;display:flex;gap:6px;align-items:center}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 4px}
+.chip{padding:6px 12px;border:1px solid var(--card-border);border-radius:20px;color:var(--text);font-size:14px;background:transparent;font-family:inherit;cursor:pointer}
+.chip.active{background:var(--accent-dark);border-color:var(--accent-dark);color:#fff}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px}
+.card{position:relative;display:block;background:var(--card);border:1px solid var(--card-border);border-radius:12px;padding:14px;color:var(--text);overflow:hidden;transition:transform .25s ease,box-shadow .25s ease,border-color .25s ease}
+.card:hover{border-color:var(--accent);transform:translateY(-3px);box-shadow:0 8px 24px rgba(0,0,0,.35)}
+.card.out{background:var(--out-bg);border-color:var(--out-border)}
+.card-link{display:block;color:var(--text)}
+.ribbon{position:absolute;top:0;right:0;background:var(--gold);color:#241a00;font-size:12px;font-weight:700;padding:3px 10px;border-radius:0 0 0 8px}
+.thumb{display:block;width:52px;height:52px;border-radius:10px;object-fit:cover;margin-bottom:10px;background:#0e1828;transition:transform .35s ease}
+.card:hover .thumb{transform:scale(1.06)}
+.thumb-text{display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:700;color:var(--accent);background:#0e1828}
+.card-name{display:block;font-weight:700;font-size:16px;line-height:1.5;margin-bottom:4px}
+.supplier,.category{display:block;color:var(--muted);font-size:13px}
+.desc{display:block;color:var(--muted);font-size:13px;line-height:1.6;margin:6px 0}
+.price{display:block;margin:10px 0 8px}
+.price .usd{display:block;font-size:19px;color:#fff}
+.price .sar,.price .yer{display:block;font-size:13px;color:var(--muted)}
+.badges{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:700}
+.badge-ok{background:var(--green);color:#fff}
+.badge-low{background:var(--green);color:#fff}
+.badge-out{background:var(--red);color:#fff}
+.badge-new{position:relative;overflow:hidden;background:var(--accent-dark);color:#fff}
+.badge-new::after{content:"";position:absolute;inset:0;background:linear-gradient(120deg,transparent 30%,rgba(255,255,255,.45) 50%,transparent 70%);transform:translateX(-120%);animation:shine 2.8s ease-in-out infinite}
+@keyframes shine{0%,60%{transform:translateX(-120%)}100%{transform:translateX(120%)}}
+.tag{display:inline-block;padding:2px 8px;border:1px solid var(--card-border);border-radius:20px;font-size:12px;color:var(--muted)}
+.synced{display:block;color:var(--muted);font-size:12px;margin-top:8px}
+.fav{position:absolute;top:10px;left:10px;z-index:2;width:34px;height:34px;border-radius:50%;border:1px solid var(--card-border);background:rgba(10,15,26,.55);color:#c7d3e6;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.fav svg{width:18px;height:18px}
+.fav.on{color:#e5484d;border-color:#e5484d}
+body.favs-only .card:not(.fav-on){display:none}
+.reveal{opacity:0;transform:translateY(10px);transition:opacity .5s ease,transform .5s ease}
+.reveal.visible{opacity:1;transform:none}
+@media (prefers-reduced-motion: reduce){*,*::before,*::after{animation:none!important;transition:none!important}.reveal{opacity:1;transform:none}}
+.error{background:#3d1b22;border:1px solid var(--out-border);color:#ffb4b8;padding:10px 14px;border-radius:8px}
+.empty{color:var(--muted)}
+.back{margin:6px 0 14px}
+.more{display:inline-block;margin:10px 0 4px;font-size:14px}
+.pager{display:flex;gap:12px;align-items:center;justify-content:center;margin:22px 0}
+.detail{position:relative;background:var(--card);border:1px solid var(--card-border);border-radius:12px;padding:20px;max-width:760px;transition:transform .25s ease,box-shadow .25s ease,border-color .25s ease}
+.detail.out{background:var(--out-bg);border-color:var(--out-border)}
+.detail h1{margin-top:0}
+.detail .desc{font-size:15px;line-height:1.9;color:var(--text)}
+.price-box{background:#0e1828;border:1px solid var(--card-border);border-radius:10px;padding:14px;margin:14px 0;line-height:2}
+.price-box .usd{font-size:22px;font-weight:700;color:#fff}
+.stock-line{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.ribbon-inline{background:var(--gold);color:#241a00;font-size:12px;font-weight:700;padding:3px 10px;border-radius:20px}
+.out-note{background:#3d1b22;border:1px solid var(--out-border);color:#ffb4b8;padding:10px 14px;border-radius:8px}
+.btn{display:inline-block;padding:11px 20px;border-radius:8px;background:var(--accent-dark);color:#fff;font-weight:700}
+.btn.ghost{background:transparent;border:1px solid var(--card-border);color:var(--text);cursor:pointer;font-size:15px;font-family:inherit}
+.actions{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0}
+.soon{color:var(--muted);font-size:14px;line-height:1.8}
+[data-theme="light"] .price .usd{color:#16233a}
+[data-theme="light"] .search input[type=search],[data-theme="light"] .search select{background:#fff;color:var(--text)}
+[data-theme="light"] .price-box{background:#f4f7fc}
+[data-theme="light"] .thumb,[data-theme="light"] .thumb-text{background:#e8eef7}
+[data-theme="light"] .fav{background:rgba(255,255,255,.7)}
+</style>
+</head>
+<body>
+<header class="header">
+  <a class="brand" href="/shop">منصة اليمن الإلكترونية</a>
+  <span class="sub">متجر الاشتراكات الرقمية</span>
+  <button type="button" class="theme-btn" id="themeToggle">الوضع: داكن</button>
+</header>
+<main class="wrap">{% block content %}{% endblock %}</main>
+<footer class="footer">
+  الأسعار بالدولار الأمريكي والريال السعودي والريال اليمني.
+  الشراء من الموقع قادم قريباً  للشراء الآن:
+  <a href="https://t.me/YemenSubscriptionsBot">بوت التليجرام @YemenSubscriptionsBot</a>
+</footer>
+<script>
+(function(){
+  function paintTheme(){
+    var b=document.getElementById('themeToggle');
+    var t=document.documentElement.getAttribute('data-theme')||'dark';
+    if(b){b.textContent=(t==='light')?'الوضع: فاتح':'الوضع: داكن';}
+  }
+  var themeBtn=document.getElementById('themeToggle');
+  if(themeBtn){
+    themeBtn.addEventListener('click',function(){
+      var cur=document.documentElement.getAttribute('data-theme')||'dark';
+      var next=(cur==='light')?'dark':'light';
+      document.documentElement.setAttribute('data-theme',next);
+      try{localStorage.setItem('yemen-shop-theme',next);}catch(e){}
+      paintTheme();
+    });
+  }
+  paintTheme();
+
+  var FAV_KEY='yemen-shop-favs';
+  function loadFavs(){try{return JSON.parse(localStorage.getItem(FAV_KEY)||'{}');}catch(e){return{};}}
+  function saveFavs(f){try{localStorage.setItem(FAV_KEY,JSON.stringify(f));}catch(e){}}
+  var favs=loadFavs();
+  function updateFavUI(){
+    var on=document.body.classList.contains('favs-only');
+    var total=0;
+    document.querySelectorAll('.group').forEach(function(g){
+      var n=g.querySelectorAll('.card.fav-on').length;
+      total+=n;
+      g.style.display=(on&&n===0)?'none':'';
+    });
+    var nf=document.getElementById('noFavs');
+    if(nf){nf.hidden=!(on&&total===0);}
+    var ff=document.getElementById('favFilter');
+    if(ff){ff.classList.toggle('active',on);}
+  }
+  function paintFavs(){
+    document.querySelectorAll('[data-fav]').forEach(function(b){
+      var on=!!favs[b.getAttribute('data-fav')];
+      b.classList.toggle('on',on);
+      var card=b.closest('.card, .detail');
+      if(card){card.classList.toggle('fav-on',on);}
+    });
+    updateFavUI();
+  }
+  document.querySelectorAll('[data-fav]').forEach(function(b){
+    b.addEventListener('click',function(){
+      var k=b.getAttribute('data-fav');
+      if(favs[k]){delete favs[k];}else{favs[k]=1;}
+      saveFavs(favs);
+      paintFavs();
+    });
+  });
+  var favFilter=document.getElementById('favFilter');
+  if(favFilter){
+    favFilter.addEventListener('click',function(){
+      document.body.classList.toggle('favs-only');
+      updateFavUI();
+    });
+  }
+  paintFavs();
+
+  function copyText(btn){
+    var t=btn.getAttribute('data-copy')||'';
+    function done(){
+      var o=btn.textContent;
+      btn.textContent='تم النسخ';
+      setTimeout(function(){btn.textContent=o;},1500);
+    }
+    function fallback(){
+      var ta=document.createElement('textarea');
+      ta.value=t;
+      document.body.appendChild(ta);
+      ta.select();
+      try{document.execCommand('copy');done();}catch(e){}
+      document.body.removeChild(ta);
+    }
+    if(navigator.clipboard&&navigator.clipboard.writeText){
+      navigator.clipboard.writeText(t).then(done,fallback);
+    }else{fallback();}
+  }
+  document.querySelectorAll('[data-copy]').forEach(function(b){
+    b.addEventListener('click',function(){copyText(b);});
+  });
+
+  var animated=document.querySelectorAll('.card, .detail');
+  animated.forEach(function(el){el.classList.add('reveal');});
+  if('IntersectionObserver' in window){
+    var io=new IntersectionObserver(function(entries){
+      entries.forEach(function(en){
+        if(en.isIntersecting){
+          en.target.classList.add('visible');
+          io.unobserve(en.target);
+          setTimeout(function(){en.target.classList.remove('reveal');},600);
+        }
+      });
+    },{threshold:0.08});
+    animated.forEach(function(el){io.observe(el);});
+  }else{
+    animated.forEach(function(el){el.classList.add('visible');});
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,38 @@
+{% extends "shop/base.html" %}
+{% block content %}
+<p class="back"><a href="/shop"> رجوع إلى المتجر</a></p>
+{% if error %}
+<p class="error">{{ error }}</p>
+{% elif item %}
+<article class="detail{% if item.stock.state == 'out' %} out{% endif %}">
+  <button type="button" class="fav" data-fav="{{ item.fav_key }}" aria-label="إضافة إلى المفضلة" title="مفضلة"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-7.5-4.7-9.8-9.2C.3 7.9 2.9 4 7 4c2.4 0 4 1.4 5 3 1-1.6 2.6-3 5-3 4.1 0 6.7 3.9 4.8 7.8C19.5 16.3 12 21 12 21z" fill="currentColor"/></svg></button>
+  <h1>{{ item.name }}</h1>
+  {% if item.supplier_name %}<p class="supplier">{{ item.supplier_name }}</p>{% endif %}
+  {% if item.category %}<p class="category">{{ item.category }}</p>{% endif %}
+  {% if item.image_url %}<img class="thumb" src="{{ item.image_url }}" alt="" loading="lazy">{% endif %}
+  <p class="desc">{{ item.description }}</p>
+  <div class="price-box">
+    {% if item.prices.usd %}<div class="usd">{{ item.prices.usd }}</div>
+    {% if item.prices.sar %}<div>{{ item.prices.sar }}</div>{% endif %}
+    {% if item.prices.yer %}<div>{{ item.prices.yer }}</div>{% endif %}
+    {% else %}<div>السعر غير متوفر حالياً</div>{% endif %}
+  </div>
+  <p class="stock-line">
+    <span class="badge badge-{{ item.stock.state }}">{{ item.stock.badge }}</span>
+    {% if item.is_new %}<span class="badge badge-new">جديد</span>{% endif %}
+    {% if item.delivery %}<span class="tag">{{ item.delivery }}</span>{% endif %}
+    <span>{{ item.stock.stock_text }}</span>
+  </p>
+  {% if item.last_synced %}<p class="synced">آخر تحديث: {{ item.last_synced }}</p>{% elif item.kind == 'supplier' %}<p class="synced">آخر تحديث: لم تتم المزامنة بعد</p>{% endif %}
+  {% if item.stock.state == 'out' %}
+  <p class="out-note">نفدت الكمية من هذا المنتج حالياً. سيعود للتوفر بعد المزامنة التالية مع المورد أو بعد إضافة أكواد جديدة.</p>
+  {% endif %}
+  <p class="actions">
+    <button type="button" class="btn ghost" data-copy="{{ item.share_url }}">نسخ رابط المنتج</button>
+    <button type="button" class="btn ghost" data-copy="{{ item.description }}">نسخ الوصف</button>
+  </p>
+  <p class="soon">الشراء من الموقع قادم قريباً.</p>
+  <p><a class="btn" href="https://t.me/YemenSubscriptionsBot">شراء عبر بوت التليجرام</a></p>
+</article>
+{% endif %}
+{% endblock %}

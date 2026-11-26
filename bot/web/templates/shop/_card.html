@@ -1,0 +1,23 @@
+<article class="card{% if p.stock.state == 'out' %} out{% endif %}">
+  <button type="button" class="fav" data-fav="{{ p.fav_key }}" aria-label="إضافة إلى المفضلة" title="مفضلة"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-7.5-4.7-9.8-9.2C.3 7.9 2.9 4 7 4c2.4 0 4 1.4 5 3 1-1.6 2.6-3 5-3 4.1 0 6.7 3.9 4.8 7.8C19.5 16.3 12 21 12 21z" fill="currentColor"/></svg></button>
+  <a class="card-link" href="{{ p.url }}">
+    {% if p.stock.ribbon %}<span class="ribbon">{{ p.stock.ribbon }}</span>{% endif %}
+    {% if p.image_url %}<img class="thumb" src="{{ p.image_url }}" alt="" loading="lazy">{% else %}<span class="thumb thumb-text">{{ p.name[:1] }}</span>{% endif %}
+    <span class="card-name">{{ p.name }}</span>
+    {% if p.supplier_name %}<span class="supplier">{{ p.supplier_name }}</span>{% endif %}
+    {% if p.category %}<span class="category">{{ p.category }}</span>{% endif %}
+    {% if p.description %}<span class="desc">{{ p.description }}</span>{% endif %}
+    <span class="price">
+      {% if p.prices.usd %}<b class="usd">{{ p.prices.usd }}</b>
+      {% if p.prices.sar %}<span class="sar">{{ p.prices.sar }}</span>{% endif %}
+      {% if p.prices.yer %}<span class="yer">{{ p.prices.yer }}</span>{% endif %}
+      {% else %}<b class="usd">السعر غير متوفر</b>{% endif %}
+    </span>
+    <span class="badges">
+      <span class="badge badge-{{ p.stock.state }}">{{ p.stock.badge }}</span>
+      {% if p.is_new %}<span class="badge badge-new">جديد</span>{% endif %}
+      {% if p.delivery %}<span class="tag">{{ p.delivery }}</span>{% endif %}
+    </span>
+  </a>
+  {% if p.last_synced %}<span class="synced">آخر تحديث: {{ p.last_synced }}</span>{% endif %}
+</article>
