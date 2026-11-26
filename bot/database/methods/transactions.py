@@ -1335,3 +1335,24 @@ def format_amount_ar(amount, currency) -> str:
     if cur == "SAR":
         return f"{ns} ريال سعودي"
     return f"{ns} ريال يمني"
+def convert_from_usd(usd_amount, currency, rates: dict, *, ceiling: bool = True) -> Decimal:
+    """Convert a USD amount to YER/SAR/USD for display.
+
+    YER: USD x usd_to_yer, rounded to integer. SAR: derived from the YER
+    value ( / sar_to_yer, 2dp), like subscriptions. USD: as-is (2dp).
+    `ceiling` picks the rounding direction: True for a minimum (so the
+    displayed minimum is valid), False for a maximum.
+    """
+    from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP
+
+    rnd = ROUND_CEILING if ceiling else ROUND_FLOOR
+    usd = Decimal(str(usd_amount)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    cur = (currency or "YER").upper()
+    usd_to_yer = Decimal(str(rates.get("usd_to_yer") or 535))
+    sar_to_yer = Decimal(str(rates.get("sar_to_yer") or 140))
+    if cur == "SAR":
+        yer = (usd * usd_to_yer).quantize(Decimal("1"), rounding=rnd)
+        return (yer / sar_to_yer).quantize(Decimal("0.01"), rounding=rnd)
+    if cur == "USD":
+        return usd.quantize(Decimal("0.01"), rounding=rnd)
+    return (usd * usd_to_yer).quantize(Decimal("1"), rounding=rnd)

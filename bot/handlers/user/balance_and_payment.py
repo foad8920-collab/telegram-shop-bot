@@ -49,61 +49,115 @@ async def _notify_referrer_bonus(bot, user_id: int, amount: Decimal | int, payer
         logger.error(f"Failed to send referral notification to user {referral_id}: {e}")
 
 
+_CUR_NAME_AR = {"YER": "الريال اليمني", "SAR": "الريال السعودي", "USD": "الدولار"}
+
+
+def _topup_display(data: dict) -> tuple:
+    """(entered_text, usd_text) for the top-up in state data.
+
+    e.g. ('1000 ريال يمني', '$1.87'). Falls back to the legacy '$amount'
+    when the entered amount was not stored (older sessions).
+    """
+    from decimal import Decimal
+    from bot.database.methods.transactions import format_amount_ar as _fmt_amt
+
+    amount = data.get("amount")
+    entered = data.get("amount_entered")
+    cur = (data.get("amount_currency") or "YER").upper()
+    if entered is None or amount is None:
+        _legacy = f"{amount}$" if amount is not None else ""
+        return _legacy, _legacy
+    return _fmt_amt(Decimal(str(entered)), cur), f"${Decimal(str(amount))}"
+
+
 @router.callback_query(F.data == "replenish_balance")
 async def replenish_balance_callback_handler(call: CallbackQuery, state: FSMContext):
-    """Ask user for the amount if at least one payment method is enabled."""
+    """Ask user for the payment currency first (buttons)."""
     if not _any_payment_method_enabled():
         await call.answer(localize("payments.not_configured"), show_alert=True)
         return
 
+    from aiogram.types import InlineKeyboardButton as _KB, InlineKeyboardMarkup as _KM
     await call.message.edit_text(
-        localize("payments.replenish_prompt", currency=EnvKeys.PAY_CURRENCY),
-        reply_markup=back('profile')
+        " <b>اختر عملة الشحن:</b>",
+        parse_mode="HTML",
+        reply_markup=_KM(inline_keyboard=[
+            [_KB(text="دولار (USD)", callback_data="topup_currency:USD")],
+            [_KB(text="ريال سعودي (SAR)", callback_data="topup_currency:SAR")],
+            [_KB(text="ريال يمني (YER)", callback_data="topup_currency:YER")],
+            [_KB(text=" رجوع", callback_data="profile", style="primary")],
+        ]),
+    )
+    await state.set_state(BalanceStates.waiting_currency)
+
+
+@router.callback_query(BalanceStates.waiting_currency, F.data.startswith("topup_currency:"))
+async def topup_currency_choose(call: CallbackQuery, state: FSMContext):
+    """Store the chosen top-up currency, then ask for the amount in it."""
+    await call.answer()
+    cur = (call.data.split(":", 1)[1] or "").strip().upper()
+    if cur not in ("USD", "SAR", "YER"):
+        return
+    await state.update_data(topup_currency=cur)
+    await call.message.edit_text(
+        localize("payments.replenish_prompt", currency=_CUR_NAME_AR[cur]),
+        reply_markup=back('replenish_balance')
     )
     await state.set_state(BalanceStates.waiting_amount)
 
 
-@router.message(BalanceStates.waiting_amount, ValidAmountFilter())
+@router.message(BalanceStates.waiting_amount)
 async def replenish_balance_amount(message: Message, state: FSMContext):
-    """Store amount and show payment methods."""
+    """Parse the amount in the chosen currency, convert to USD, validate, store."""
+    data = await state.get_data()
+    cur = (data.get("topup_currency") or "YER").upper()
+    if cur not in ("USD", "SAR", "YER"):
+        cur = "YER"
     try:
-        # Validate amount using Pydantic
-        amount = validate_money_amount(
-            message.text,
-            min_amount=Decimal(EnvKeys.MIN_AMOUNT),
-            max_amount=Decimal(EnvKeys.MAX_AMOUNT)
+        import re as _re
+        from bot.database.methods.transactions import (
+            parse_amount_with_currency as _parse_amt,
+            convert_to_usd as _to_usd,
+            convert_from_usd as _from_usd,
+            get_currency_rates as _rates_fn,
         )
-
-        await state.update_data(amount=int(amount))
-
-        await message.answer(
-            localize("payments.method_choose"),
-            reply_markup=get_payment_choice()
-        )
-        await state.set_state(BalanceStates.waiting_payment)
-
-    except ValueError:
+        _rates = await _rates_fn()
+        _raw = (message.text or "").strip()
+        _digits = _raw.translate(str.maketrans("\u0660\u0661\u0662\u0663\u0664\u0665\u0666\u0667\u0668\u0669", "0123456789"))
+        _is_bare = bool(_re.match(r"^[0-9][0-9,]*(\.[0-9]+)?$", _digits))
+        _entered, _parsed_cur = _parse_amt(_raw)
+        if _is_bare:
+            _parsed_cur = cur
+        _usd = _to_usd(_entered, _parsed_cur, _rates)
+        if _entered <= 0 or _usd > Decimal(EnvKeys.MAX_AMOUNT):
+            raise ValueError("out of range")
+    except Exception:
+        try:
+            from bot.database.methods.transactions import convert_from_usd as _from_usd2, get_currency_rates as _rates_fn2
+            _r2 = await _rates_fn2()
+            _mn = Decimal("1")
+            _mx = _from_usd2(Decimal(EnvKeys.MAX_AMOUNT), cur, _r2, ceiling=False)
+        except Exception:
+            _mn, _mx = Decimal("1"), Decimal(EnvKeys.MAX_AMOUNT)
+        _disp = lambda d: format(Decimal(str(d)).normalize(), "f")
         await message.answer(
             localize("payments.replenish_invalid",
-                     min_amount=EnvKeys.MIN_AMOUNT,
-                     max_amount=EnvKeys.MAX_AMOUNT,
-                     currency=EnvKeys.PAY_CURRENCY),
+                     min_amount=_disp(_mn),
+                     max_amount=_disp(_mx),
+                     currency=_CUR_NAME_AR[cur]),
             reply_markup=back('replenish_balance')
         )
+        return
 
-
-@router.message(BalanceStates.waiting_amount)
-async def invalid_amount(message: Message, state: FSMContext):
-    """
-    Tell user the amount is invalid.
-    """
+    await state.update_data(amount=str(_usd), amount_entered=str(_entered), amount_currency=_parsed_cur, topup_currency=_parsed_cur)
     await message.answer(
-        localize("payments.replenish_invalid",
-                 min_amount=EnvKeys.MIN_AMOUNT,
-                 max_amount=EnvKeys.MAX_AMOUNT,
-                 currency=EnvKeys.PAY_CURRENCY),
-        reply_markup=back('replenish_balance')
+        localize("payments.method_choose"),
+        reply_markup=get_payment_choice()
     )
+    await state.set_state(BalanceStates.waiting_payment)
+
+
+
 
 
 @router.callback_query(
@@ -178,7 +232,7 @@ async def process_replenish_balance(call: CallbackQuery, state: FSMContext):
 
             await call.message.edit_text(
                 localize("payments.invoice.summary",
-                         amount=int(amount_dec),
+                         amount=amount_dec,
                          minutes=int(ttl_seconds / 60),
                          button=localize("btn.check_payment"),
                          currency=payment_request.currency),
@@ -745,9 +799,10 @@ async def pay_manual_start(call: CallbackQuery, state: FSMContext):
         )])
     rows.append([InlineKeyboardButton(text=" رجوع", callback_data="replenish_balance", style="primary")])
 
+    _entered_txt, _usd_txt = _topup_display(data)
     await call.message.edit_text(
         f" <b>اختر طريقة الدفع</b>\n\n"
-        f" المبلغ: <b>{amount}$</b>",
+        f" المبلغ: <b>{_entered_txt}</b>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
     )
@@ -776,9 +831,10 @@ async def pay_manual_show_account(call: CallbackQuery, state: FSMContext):
 
     await state.update_data(payment_method_id=method_id, payment_method_name=pm.name)
 
+    _entered_txt, _usd_txt = _topup_display(data)
     await call.message.edit_text(
         f" <b>{pm.name}</b>\n\n"
-        f" المبلغ: <b>{amount}$</b>\n\n"
+        f" المبلغ: <b>{_entered_txt}</b>\n\n"
         f" <b>رقم الحساب / التعليمات:</b>\n"
         f"<code>{pm.account_info}</code>\n\n"
         f" قم بتحويل المبلغ، ثم أرسل <b>صورة سند الحوالة</b> هنا.",
@@ -822,12 +878,13 @@ async def pay_manual_receipt(message: Message, state: FSMContext):
         await state.clear()
         return
 
+    _entered_txt, _usd_txt = _topup_display(data)
     summary = (
         f" <b>طلب شحن جديد</b>\n\n"
         f" الطلب: <code>#{req_id}</code>\n"
         f" المستخدم: <a href=\"tg://user?id={user_id}\">{username}</a>\n"
         f" <code>{user_id}</code>\n"
-        f" المبلغ المطلوب: <b>{amount}$</b>\n"
+        f" المبلغ المطلوب: <b>{_entered_txt} ({_usd_txt})</b>\n"
         f" طريقة الدفع: <b>{pm_name}</b>\n\n"
         f" راجع السند واختر الإجراء:"
     )
@@ -853,7 +910,7 @@ async def pay_manual_receipt(message: Message, state: FSMContext):
     await message.answer(
         f" <b>تم إرسال طلبك بنجاح!</b>\n\n"
         f" رقم الطلب: <code>#{req_id}</code>\n"
-        f" المبلغ: <b>{amount}$</b>\n\n"
+        f" المبلغ: <b>{_entered_txt} ({_usd_txt})</b>\n\n"
         f" <i>سيتم مراجعة الحوالة والتأكيد خلال دقائق.</i>\n"
         f" <i>ستصلك رسالة عند الموافقة.</i>",
         parse_mode="HTML",
