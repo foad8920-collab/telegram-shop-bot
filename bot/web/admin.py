@@ -16,7 +16,7 @@ from starlette.routing import Route
 from sqlalchemy import select, text
 
 from markupsafe import Markup, escape
-from wtforms import SelectField
+from wtforms import DecimalField, SelectField
 from wtforms.validators import Optional as WtfOptional
 from sqlalchemy import select as sa_select
 from sqlalchemy.orm import joinedload, selectinload
@@ -279,6 +279,46 @@ class UserAdmin(AuditModelView, model=User):
     async def after_model_delete(self, model: Any, request: Request) -> None:
         await super().after_model_delete(model, request)
         await self._invalidate(model, blocked=False)
+
+    async def scaffold_form(self, *args, **kwargs):
+        """Add a one-off top-up (amount + currency) to the user form."""
+        Form = await super().scaffold_form(*args, **kwargs)
+
+        class UserFormWithTopUp(Form):
+            topup_amount = DecimalField(
+                "مبلغ الشحن",
+                validators=[WtfOptional()],
+                description="يضاف الى الرصيد الحالي بعد التحويل الى الدولار. اتركه فارغا اذا لم ترد الشحن.",
+            )
+            topup_currency = SelectField(
+                "عملة الشحن",
+                choices=[("YER", "ريال يمني"), ("SAR", "ريال سعودي"), ("USD", "دولار")],
+                default="YER",
+                validators=[WtfOptional()],
+            )
+
+        return UserFormWithTopUp
+
+    async def on_model_change(self, data: dict, model: Any, is_created: bool, request: Request) -> None:
+        """Convert a one-off top-up to USD and add it to the balance."""
+        topup = data.pop("topup_amount", None)
+        currency = data.pop("topup_currency", None) or "YER"
+        if topup is None:
+            return
+        try:
+            topup_dec = Decimal(str(topup))
+        except (InvalidOperation, TypeError, ValueError):
+            raise ValueError("مبلغ الشحن غير صالح.")
+        if topup_dec <= 0:
+            raise ValueError("مبلغ الشحن يجب ان يكون اكبر من صفر.")
+        if currency not in ("YER", "SAR", "USD"):
+            raise ValueError("عملة الشحن غير صالحة.")
+        from bot.database.methods.transactions import convert_to_usd, get_currency_rates
+        rates = await get_currency_rates()
+        usd = convert_to_usd(topup_dec, currency, rates)
+        base = data.get("balance")
+        base_dec = Decimal(str(base)) if base is not None else Decimal("0")
+        data["balance"] = base_dec + usd
 
 
 _PERM_FLAGS = [
