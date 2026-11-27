@@ -23,7 +23,16 @@ from decimal import Decimal
 from aiogram import types
 from sqlalchemy import func, select
 
-from .button_models import BUTTON_STYLES, MAIN_MENU_NAME, BotButton, BotRule
+from .button_models import (
+    BUTTON_STYLES,
+    DEFAULT_LABELS,
+    MAIN_MENU_NAME,
+    BotButton,
+    BotLabel,
+    BotRule,
+    label_text,
+    load_labels,
+)
 from .db import get_session_factory
 from .keyboards import TEXTS
 from .models import Order, SubworldUser
@@ -143,6 +152,25 @@ async def ensure_default_buttons() -> None:
         logger.info("SubWorld default menu buttons seeded (4 buttons)")
 
 
+async def ensure_default_labels() -> None:
+    """Seed the fixed store-button labels once, when the table is
+    empty. The panel can change every seeded row afterwards."""
+    async with _session() as session:
+        count = (
+            await session.execute(select(func.count()).select_from(BotLabel))
+        ).scalar_one()
+        if count:
+            return
+        session.add_all(
+            [
+                BotLabel(key=key, text_ar=ar, text_en=en, style=style)
+                for key, (ar, en, style) in DEFAULT_LABELS.items()
+            ]
+        )
+        await session.commit()
+        logger.info("SubWorld default button labels seeded (%d labels)", len(DEFAULT_LABELS))
+
+
 async def _welcome_stats(user_id: int):
     """(balance_usd, purchase_count) from the DB; (None, None) when the
     database is unavailable. Purchases count every order (delivered
@@ -251,7 +279,8 @@ async def edit_main_menu(callback: types.CallbackQuery, lang: str) -> None:
 
 async def _send_rules(callback: types.CallbackQuery, lang: str) -> None:
     """Rules as an edit of the current message, with a back button to
-    the main menu."""
+    the main menu (its text/colour come from the panel labels)."""
+    labels = dict(DEFAULT_LABELS)
     try:
         async with _session() as session:
             rows = (
@@ -261,11 +290,12 @@ async def _send_rules(callback: types.CallbackQuery, lang: str) -> None:
                     .order_by(BotRule.sort_order, BotRule.id)
                 )
             ).scalars().all()
+            labels = await load_labels(session)
     except Exception:
         logger.exception("SubWorld rules read failed")
         await callback.message.edit_text(
             "القوانين غير متاحة حاليا." if lang == "ar" else "Rules are unavailable right now.",
-            reply_markup=_rules_back_kb(lang),
+            reply_markup=_rules_back_kb(lang, labels),
         )
         await callback.answer()
         return
@@ -277,15 +307,15 @@ async def _send_rules(callback: types.CallbackQuery, lang: str) -> None:
         )
     else:
         text = "\n".join(f"{i}. {r.text_for(lang)}" for i, r in enumerate(rows, 1))
-    await callback.message.edit_text(text, reply_markup=_rules_back_kb(lang))
+    await callback.message.edit_text(text, reply_markup=_rules_back_kb(lang, labels))
     await callback.answer()
 
 
-def _rules_back_kb(lang: str) -> types.InlineKeyboardMarkup:
-    label = "🔙 القائمة الرئيسية" if lang == "ar" else "🔙 Main menu"
+def _rules_back_kb(lang: str, labels: dict) -> types.InlineKeyboardMarkup:
+    text, style = label_text(labels, "main_menu", lang)
     return types.InlineKeyboardMarkup(
         inline_keyboard=[
-            [types.InlineKeyboardButton(text=label, callback_data="menu:main")]
+            [types.InlineKeyboardButton(text=text, callback_data="menu:main", style=style)]
         ]
     )
 

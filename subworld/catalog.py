@@ -23,6 +23,7 @@ from decimal import Decimal
 from aiogram import F, Router, types
 from sqlalchemy import func, select
 
+from .button_models import DEFAULT_LABELS, label_text, load_labels
 from .db import get_session_factory
 from .keyboards import CHOOSE_TEXT, TEXTS, choose_kb, get_lang, main_menu_kb
 from .models import Order, Product, ProductCode, SubworldUser
@@ -155,22 +156,44 @@ async def _get_user(session, tg_id: int, lang: str) -> SubworldUser:
     return user
 
 
-def _back_kb(lang: str, target: str) -> types.InlineKeyboardMarkup:
+async def _labels() -> dict:
+    """Button labels from the panel (BotLabel rows), with hardcoded
+    defaults when the table is empty or unreadable."""
+    try:
+        async with _session() as session:
+            return await load_labels(session)
+    except Exception:
+        logger.exception("SubWorld labels read failed")
+        return dict(DEFAULT_LABELS)
+
+
+def _supplier_stock_text(product: SupplierProduct) -> str:
+    """Stock shown on a product button: the number, or ∞ when unlimited."""
+    return "∞" if product.is_unlimited else str(product.stock or 0)
+
+
+def _back_kb(lang: str, target: str, labels: dict | None = None) -> types.InlineKeyboardMarkup:
+    labels = labels or DEFAULT_LABELS
+    back_text, back_style = label_text(labels, "back", lang)
+    menu_text, menu_style = label_text(labels, "main_menu", lang)
     return types.InlineKeyboardMarkup(
         inline_keyboard=[
-            [types.InlineKeyboardButton(text=_t(lang, "back"), callback_data=target)],
-            [types.InlineKeyboardButton(text=_t(lang, "main_menu"), callback_data="menu:main")],
+            [types.InlineKeyboardButton(text=back_text, callback_data=target, style=back_style)],
+            [types.InlineKeyboardButton(text=menu_text, callback_data="menu:main", style=menu_style)],
         ]
     )
 
 
-def _nav_row(lang: str, page: int, pages: int, page_cb) -> list:
+def _nav_row(lang: str, page: int, pages: int, page_cb, labels: dict | None = None) -> list:
     """Previous / Next buttons for the current page (one row, may be empty)."""
+    labels = labels or DEFAULT_LABELS
     row = []
     if page > 1:
-        row.append(types.InlineKeyboardButton(text=_t(lang, "prev"), callback_data=page_cb(page - 1)))
+        text, style = label_text(labels, "prev", lang)
+        row.append(types.InlineKeyboardButton(text=text, callback_data=page_cb(page - 1), style=style))
     if page < pages:
-        row.append(types.InlineKeyboardButton(text=_t(lang, "next"), callback_data=page_cb(page + 1)))
+        text, style = label_text(labels, "next", lang)
+        row.append(types.InlineKeyboardButton(text=text, callback_data=page_cb(page + 1), style=style))
     return [row] if row else []
 
 
@@ -224,17 +247,18 @@ async def _load_balance(user_id: int, lang: str) -> Decimal | None:
 @catalog_router.callback_query(F.data.in_({"menu:balance", "profile"}))
 async def on_menu_balance(callback: types.CallbackQuery) -> None:
     lang = get_lang(callback.from_user.id)
+    labels = await _labels()
     if not _db_on():
-        await callback.message.edit_text(_t(lang, "store_unavailable"), reply_markup=_back_kb(lang, "menu:main"))
+        await callback.message.edit_text(_t(lang, "store_unavailable"), reply_markup=_back_kb(lang, "menu:main", labels))
         await callback.answer()
         return
     balance = await _load_balance(callback.from_user.id, lang)
     if balance is None:
-        await callback.message.edit_text(_t(lang, "store_unavailable"), reply_markup=_back_kb(lang, "menu:main"))
+        await callback.message.edit_text(_t(lang, "store_unavailable"), reply_markup=_back_kb(lang, "menu:main", labels))
         await callback.answer()
         return
     await callback.message.edit_text(
-        _balance_text(balance, lang), reply_markup=_back_kb(lang, "menu:main")
+        _balance_text(balance, lang), reply_markup=_back_kb(lang, "menu:main", labels)
     )
     await callback.answer()
 
@@ -254,20 +278,23 @@ async def _load_store_suppliers(session):
     return [r for r in rows if not (r.api_url or "").strip().startswith("local://")]
 
 
-def _store_sections_kb(lang: str, suppliers) -> types.InlineKeyboardMarkup:
-    buttons = [[types.InlineKeyboardButton(text=_t(lang, "local_section"), callback_data="shop:local_list")]]
+def _store_sections_kb(lang: str, suppliers, labels: dict | None = None) -> types.InlineKeyboardMarkup:
+    labels = labels or DEFAULT_LABELS
+    buttons = [[types.InlineKeyboardButton(text=_t(lang, "local_section"), callback_data="shop:local_list", style="primary")]]
     for sup in suppliers:
         label = (sup.display_name or sup.name or f"Supplier {sup.id}")[:40]
-        buttons.append([types.InlineKeyboardButton(text=f"🏬 {label}", callback_data=f"shop:sup:{sup.id}")])
-    buttons.append([types.InlineKeyboardButton(text=_t(lang, "main_menu"), callback_data="menu:main")])
+        buttons.append([types.InlineKeyboardButton(text=f"🏬 {label}", callback_data=f"shop:sup:{sup.id}", style="primary")])
+    menu_text, menu_style = label_text(labels, "main_menu", lang)
+    buttons.append([types.InlineKeyboardButton(text=menu_text, callback_data="menu:main", style=menu_style)])
     return types.InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 @catalog_router.callback_query(F.data.in_({"menu:shop", "shop"}))
 async def on_menu_shop(callback: types.CallbackQuery) -> None:
     lang = get_lang(callback.from_user.id)
+    labels = await _labels()
     if not _db_on():
-        await callback.message.edit_text(_t(lang, "store_unavailable"), reply_markup=_back_kb(lang, "menu:main"))
+        await callback.message.edit_text(_t(lang, "store_unavailable"), reply_markup=_back_kb(lang, "menu:main", labels))
         await callback.answer()
         return
     try:
@@ -275,12 +302,12 @@ async def on_menu_shop(callback: types.CallbackQuery) -> None:
             suppliers = await _load_store_suppliers(session)
     except Exception:
         logger.exception("SubWorld store sections failed")
-        await callback.message.edit_text(_t(lang, "store_unavailable"), reply_markup=_back_kb(lang, "menu:main"))
+        await callback.message.edit_text(_t(lang, "store_unavailable"), reply_markup=_back_kb(lang, "menu:main", labels))
         await callback.answer()
         return
     await callback.message.edit_text(
         _t(lang, "store_title"),
-        reply_markup=_store_sections_kb(lang, suppliers),
+        reply_markup=_store_sections_kb(lang, suppliers, labels),
     )
     await callback.answer()
 
@@ -292,6 +319,7 @@ async def on_menu_shop(callback: types.CallbackQuery) -> None:
 
 async def _render_local_list(callback: types.CallbackQuery, page: int) -> None:
     lang = get_lang(callback.from_user.id)
+    labels = await _labels()
     try:
         async with _session() as session:
             products = (await session.execute(
@@ -311,32 +339,44 @@ async def _render_local_list(callback: types.CallbackQuery, page: int) -> None:
             )).scalars().all()
     except Exception:
         logger.exception("SubWorld local list failed")
-        await callback.message.edit_text(_t(lang, "store_unavailable"), reply_markup=_back_kb(lang, "menu:shop"))
+        await callback.message.edit_text(_t(lang, "store_unavailable"), reply_markup=_back_kb(lang, "menu:shop", labels))
         await callback.answer()
         return
-    items = []  # (dot, label, callback_data)
+    items = []  # (dot, label, callback_data, style)
     for p in products:
         name = (p.name_en if lang == "en" else p.name_ar)[:28]
         if (p.delivery_type or "codes") == "codes":
-            dot = "🟢" if codes_left.get(p.id, 0) > 0 else "🔴"
+            stock = codes_left.get(p.id, 0)
+            buyable = stock > 0
+            stock_text = str(stock)
         else:
-            dot = "🟢" if (p.quantity is None or p.quantity > 0) else "🔴"
-        items.append((dot, f"{name} — {_fmt_price(p.price_usd)}", f"shop:local:{p.id}"))
+            buyable = p.quantity is None or p.quantity > 0
+            stock_text = "∞" if p.quantity is None else str(p.quantity)
+        dot = "🟢" if buyable else "🔴"
+        style = "success" if buyable else "danger"
+        items.append((dot, f"{name} — {_fmt_price(p.price_usd)} 📦{stock_text}", f"shop:local:{p.id}", style))
     for p in moved:
-        items.append((_supplier_dot(p), f"{p.name[:28]} — {_fmt_price(p.selling_price or 0)}", f"shop:sprod:{p.id}"))
+        buyable = _supplier_buyable(p)
+        items.append((
+            _supplier_dot(p),
+            f"{p.name[:28]} — {_fmt_price(p.selling_price or 0)} 📦{_supplier_stock_text(p)}",
+            f"shop:sprod:{p.id}",
+            "success" if buyable else "danger",
+        ))
     if not items:
-        await callback.message.edit_text(_t(lang, "empty"), reply_markup=_back_kb(lang, "menu:shop"))
+        await callback.message.edit_text(_t(lang, "empty"), reply_markup=_back_kb(lang, "menu:shop", labels))
         await callback.answer()
         return
     page_items, pages, page = _paginate(items, page)
     list_cb = f"shop:feat:{page}" if page > 1 else "shop:local_list"
     _remember_list(callback.from_user.id, list_cb)
     buttons = [
-        [types.InlineKeyboardButton(text=f"{dot} {label}", callback_data=cb)]
-        for dot, label, cb in page_items
+        [types.InlineKeyboardButton(text=f"{dot} {label}", callback_data=cb, style=style)]
+        for dot, label, cb, style in page_items
     ]
-    buttons += _nav_row(lang, page, pages, lambda p: f"shop:feat:{p}")
-    buttons.append([types.InlineKeyboardButton(text=_t(lang, "back"), callback_data="menu:shop")])
+    buttons += _nav_row(lang, page, pages, lambda p: f"shop:feat:{p}", labels)
+    back_text, back_style = label_text(labels, "back", lang)
+    buttons.append([types.InlineKeyboardButton(text=back_text, callback_data="menu:shop", style=back_style)])
     title = _t(lang, "local_title")
     if pages > 1:
         title += f"\n{_t(lang, 'page')} {page} {_t(lang, 'of')} {pages}"
@@ -383,6 +423,7 @@ async def _supplier_categories(session, supplier_id: int):
 @catalog_router.callback_query(F.data.startswith("shop:sup:"))
 async def on_supplier_categories(callback: types.CallbackQuery) -> None:
     lang = get_lang(callback.from_user.id)
+    labels = await _labels()
     try:
         supplier_id = int(callback.data.split(":")[2])
     except (IndexError, ValueError):
@@ -401,12 +442,12 @@ async def on_supplier_categories(callback: types.CallbackQuery) -> None:
             )).scalar_one()
     except Exception:
         logger.exception("SubWorld supplier categories failed")
-        await _safe_edit(callback, _t(lang, "store_unavailable"), _back_kb(lang, "menu:shop"))
+        await _safe_edit(callback, _t(lang, "store_unavailable"), _back_kb(lang, "menu:shop", labels))
         await callback.answer()
         return
     title = (supplier.display_name or supplier.name) if supplier else f"Supplier {supplier_id}"
     if total == 0:
-        await _safe_edit(callback, f"🏬 {title}\n{_t(lang, 'empty')}", _back_kb(lang, "menu:shop"))
+        await _safe_edit(callback, f"🏬 {title}\n{_t(lang, 'empty')}", _back_kb(lang, "menu:shop", labels))
         await callback.answer()
         return
     if len(cats) <= 1:
@@ -419,12 +460,16 @@ async def on_supplier_categories(callback: types.CallbackQuery) -> None:
         buttons.append([types.InlineKeyboardButton(
             text=f"📁 {label}",
             callback_data=f"shop:supc:{supplier_id}:{idx}:1",
+            style="primary",
         )])
+    all_text, all_style = label_text(labels, "all_products", lang)
     buttons.append([types.InlineKeyboardButton(
-        text=_t(lang, "all_products"),
+        text=all_text,
         callback_data=f"shop:supa:{supplier_id}:1",
+        style=all_style,
     )])
-    buttons.append([types.InlineKeyboardButton(text=_t(lang, "back"), callback_data="menu:shop")])
+    back_text, back_style = label_text(labels, "back", lang)
+    buttons.append([types.InlineKeyboardButton(text=back_text, callback_data="menu:shop", style=back_style)])
     await _safe_edit(
         callback,
         f"🏬 {title}\n{_t(lang, 'categories')}",
@@ -437,6 +482,7 @@ async def _render_supplier_products(
     callback: types.CallbackQuery, supplier_id: int, cat_idx: int | None, page: int
 ) -> None:
     lang = get_lang(callback.from_user.id)
+    labels = await _labels()
     try:
         async with _session() as session:
             supplier = await session.get(Supplier, supplier_id)
@@ -469,7 +515,7 @@ async def _render_supplier_products(
             )).scalars().all()
     except Exception:
         logger.exception("SubWorld supplier list failed")
-        await _safe_edit(callback, _t(lang, "store_unavailable"), _back_kb(lang, "menu:shop"))
+        await _safe_edit(callback, _t(lang, "store_unavailable"), _back_kb(lang, "menu:shop", labels))
         await callback.answer()
         return
     title = (supplier.display_name or supplier.name) if supplier else f"Supplier {supplier_id}"
@@ -483,7 +529,7 @@ async def _render_supplier_products(
     # same list and Telegram refuses ("message is not modified").
     back_cb = f"shop:sup:{supplier_id}" if len(cats) > 1 else "menu:shop"
     if not rows:
-        await _safe_edit(callback, f"🏬 {title}\n{_t(lang, 'empty')}", _back_kb(lang, back_cb))
+        await _safe_edit(callback, f"🏬 {title}\n{_t(lang, 'empty')}", _back_kb(lang, back_cb, labels))
         await callback.answer()
         return
     page_rows, pages, page = _paginate(rows, page)
@@ -496,13 +542,15 @@ async def _render_supplier_products(
     _remember_list(callback.from_user.id, list_cb)
     buttons = [
         [types.InlineKeyboardButton(
-            text=f"{_supplier_dot(p)} {p.name[:28]} — {_fmt_price(p.selling_price or 0)}",
+            text=f"{_supplier_dot(p)} {p.name[:28]} — {_fmt_price(p.selling_price or 0)} 📦{_supplier_stock_text(p)}",
             callback_data=f"shop:sprod:{p.id}",
+            style="success" if _supplier_buyable(p) else "danger",
         )]
         for p in page_rows
     ]
-    buttons += _nav_row(lang, page, pages, page_cb)
-    buttons.append([types.InlineKeyboardButton(text=_t(lang, "back"), callback_data=back_cb)])
+    buttons += _nav_row(lang, page, pages, page_cb, labels)
+    back_text, back_style = label_text(labels, "back", lang)
+    buttons.append([types.InlineKeyboardButton(text=back_text, callback_data=back_cb, style=back_style)])
     text = f"🏬 {title}:"
     if pages > 1:
         text += f"\n{_t(lang, 'page')} {page} {_t(lang, 'of')} {pages}"
@@ -539,6 +587,7 @@ async def on_supplier_all_page(callback: types.CallbackQuery) -> None:
 @catalog_router.callback_query(F.data.startswith("shop:local:"))
 async def on_local_detail(callback: types.CallbackQuery) -> None:
     lang = get_lang(callback.from_user.id)
+    labels = await _labels()
     try:
         product_id = int(callback.data.split(":")[2])
     except (IndexError, ValueError):
@@ -558,11 +607,11 @@ async def on_local_detail(callback: types.CallbackQuery) -> None:
                 codes_left = len(codes_left)
     except Exception:
         logger.exception("SubWorld local detail failed")
-        await callback.message.edit_text(_t(lang, "store_unavailable"), reply_markup=_back_kb(lang, "shop:local_list"))
+        await callback.message.edit_text(_t(lang, "store_unavailable"), reply_markup=_back_kb(lang, "shop:local_list", labels))
         await callback.answer()
         return
     if product is None or not product.is_active:
-        await callback.message.edit_text(_t(lang, "gone"), reply_markup=_back_kb(lang, "shop:local_list"))
+        await callback.message.edit_text(_t(lang, "gone"), reply_markup=_back_kb(lang, "shop:local_list", labels))
         await callback.answer()
         return
     name = product.name_en if lang == "en" else product.name_ar
@@ -575,18 +624,22 @@ async def on_local_detail(callback: types.CallbackQuery) -> None:
         lines.append(f"{_t(lang, 'duration')}: {product.duration_days} {_t(lang, 'days')}")
     if codes_left is not None:
         lines.append(f"{_t(lang, 'stock')}: {codes_left} {_t(lang, 'codes_left')}")
-    elif (product.delivery_type or "codes") != "codes" and product.quantity is not None:
-        lines.append(f"{_t(lang, 'stock')}: {product.quantity}")
+    elif (product.delivery_type or "codes") != "codes":
+        stock = _t(lang, "unlimited") if product.quantity is None else str(product.quantity)
+        lines.append(f"{_t(lang, 'stock')}: {stock}")
     if (product.delivery_type or "codes") == "codes":
         buyable = (codes_left or 0) > 0
     else:
         buyable = product.quantity is None or product.quantity > 0
+    buy_text, buy_style = label_text(labels, "buy", lang)
+    back_text, back_style = label_text(labels, "back", lang)
     rows = []
     if buyable:
-        rows.append([types.InlineKeyboardButton(text=_t(lang, "buy"), callback_data=f"shop:buy:local:{product.id}")])
+        rows.append([types.InlineKeyboardButton(text=buy_text, callback_data=f"shop:buy:local:{product.id}", style=buy_style)])
     rows.append([types.InlineKeyboardButton(
-        text=_t(lang, "back"),
+        text=back_text,
         callback_data=_back_to_list(callback.from_user.id, "shop:local_list"),
+        style=back_style,
     )])
     kb = types.InlineKeyboardMarkup(inline_keyboard=rows)
     await callback.message.edit_text("\n".join(lines), reply_markup=kb)
@@ -596,6 +649,7 @@ async def on_local_detail(callback: types.CallbackQuery) -> None:
 @catalog_router.callback_query(F.data.startswith("shop:sprod:"))
 async def on_supplier_detail(callback: types.CallbackQuery) -> None:
     lang = get_lang(callback.from_user.id)
+    labels = await _labels()
     try:
         product_id = int(callback.data.split(":")[2])
     except (IndexError, ValueError):
@@ -610,11 +664,11 @@ async def on_supplier_detail(callback: types.CallbackQuery) -> None:
                 supplier_name = (supplier.display_name or supplier.name) if supplier else None
     except Exception:
         logger.exception("SubWorld supplier detail failed")
-        await callback.message.edit_text(_t(lang, "store_unavailable"), reply_markup=_back_kb(lang, "menu:shop"))
+        await callback.message.edit_text(_t(lang, "store_unavailable"), reply_markup=_back_kb(lang, "menu:shop", labels))
         await callback.answer()
         return
     if product is None or not product.is_visible:
-        await callback.message.edit_text(_t(lang, "gone"), reply_markup=_back_kb(lang, "menu:shop"))
+        await callback.message.edit_text(_t(lang, "gone"), reply_markup=_back_kb(lang, "menu:shop", labels))
         await callback.answer()
         return
     buyable = _supplier_buyable(product)
@@ -630,12 +684,15 @@ async def on_supplier_detail(callback: types.CallbackQuery) -> None:
     lines.append(stock_line)
     if supplier_name:
         lines.append(f"🏬 {supplier_name}")
+    buy_text, buy_style = label_text(labels, "buy", lang)
+    back_text, back_style = label_text(labels, "back", lang)
     rows = []
     if buyable:
-        rows.append([types.InlineKeyboardButton(text=_t(lang, "buy"), callback_data=f"shop:buy:sup:{product.id}")])
+        rows.append([types.InlineKeyboardButton(text=buy_text, callback_data=f"shop:buy:sup:{product.id}", style=buy_style)])
     rows.append([types.InlineKeyboardButton(
-        text=_t(lang, "back"),
+        text=back_text,
         callback_data=_back_to_list(callback.from_user.id, f"shop:sup:{product.supplier_id}"),
+        style=back_style,
     )])
     kb = types.InlineKeyboardMarkup(inline_keyboard=rows)
     await callback.message.edit_text("\n".join(lines), reply_markup=kb)
@@ -658,6 +715,7 @@ def _insufficient_text(lang: str, balance: Decimal, price: Decimal) -> str:
 @catalog_router.callback_query(F.data.startswith("shop:buy:"))
 async def on_buy(callback: types.CallbackQuery) -> None:
     lang = get_lang(callback.from_user.id)
+    labels = await _labels()
     parts = (callback.data or "").split(":")
     if len(parts) != 4:
         await callback.answer()
@@ -670,7 +728,7 @@ async def on_buy(callback: types.CallbackQuery) -> None:
         return
     back_target = "shop:local_list" if kind == "local" else "menu:shop"
     if not _db_on():
-        await callback.message.edit_text(_t(lang, "store_unavailable"), reply_markup=_back_kb(lang, back_target))
+        await callback.message.edit_text(_t(lang, "store_unavailable"), reply_markup=_back_kb(lang, back_target, labels))
         await callback.answer()
         return
     try:
@@ -680,7 +738,7 @@ async def on_buy(callback: types.CallbackQuery) -> None:
             if kind == "local":
                 product = await session.get(Product, product_id)
                 if product is None or not product.is_active:
-                    await callback.message.edit_text(_t(lang, "gone"), reply_markup=_back_kb(lang, back_target))
+                    await callback.message.edit_text(_t(lang, "gone"), reply_markup=_back_kb(lang, back_target, labels))
                     await callback.answer()
                     return
                 if (
@@ -688,7 +746,7 @@ async def on_buy(callback: types.CallbackQuery) -> None:
                     and product.quantity is not None
                     and product.quantity <= 0
                 ):
-                    await callback.message.edit_text(_t(lang, "gone"), reply_markup=_back_kb(lang, back_target))
+                    await callback.message.edit_text(_t(lang, "gone"), reply_markup=_back_kb(lang, back_target, labels))
                     await callback.answer()
                     return
                 price = Decimal(str(product.price_usd))
@@ -696,7 +754,7 @@ async def on_buy(callback: types.CallbackQuery) -> None:
                 if balance < price:
                     await callback.message.edit_text(
                         _insufficient_text(lang, balance, price),
-                        reply_markup=_back_kb(lang, back_target),
+                        reply_markup=_back_kb(lang, back_target, labels),
                     )
                     await callback.answer()
                     return
@@ -709,7 +767,7 @@ async def on_buy(callback: types.CallbackQuery) -> None:
                         ).order_by(ProductCode.id).limit(1)
                     )).scalars().first()
                     if code_row is None:
-                        await callback.message.edit_text(_t(lang, "no_codes"), reply_markup=_back_kb(lang, back_target))
+                        await callback.message.edit_text(_t(lang, "no_codes"), reply_markup=_back_kb(lang, back_target, labels))
                         await callback.answer()
                         return
                 user.balance_usd = balance - price
@@ -746,20 +804,20 @@ async def on_buy(callback: types.CallbackQuery) -> None:
                         f"{_t(lang, 'price')}: {_fmt_price(price)}\n"
                         f"{_t(lang, 'remaining')}: {_fmt_price(new_balance)}"
                     )
-                await callback.message.edit_text(text, reply_markup=_back_kb(lang, "menu:shop"))
+                await callback.message.edit_text(text, reply_markup=_back_kb(lang, "menu:shop", labels))
                 await callback.answer()
                 return
             # Supplier product: pending order, admin delivers.
             product = await session.get(SupplierProduct, product_id)
             if product is None or not product.is_visible or not _supplier_buyable(product):
-                await callback.message.edit_text(_t(lang, "gone"), reply_markup=_back_kb(lang, back_target))
+                await callback.message.edit_text(_t(lang, "gone"), reply_markup=_back_kb(lang, back_target, labels))
                 await callback.answer()
                 return
             price = Decimal(str(product.selling_price or 0))
             if balance < price:
                 await callback.message.edit_text(
                     _insufficient_text(lang, balance, price),
-                    reply_markup=_back_kb(lang, back_target),
+                    reply_markup=_back_kb(lang, back_target, labels),
                 )
                 await callback.answer()
                 return
@@ -782,11 +840,11 @@ async def on_buy(callback: types.CallbackQuery) -> None:
                 f"{_t(lang, 'price')}: {_fmt_price(price)}\n"
                 f"{_t(lang, 'remaining')}: {_fmt_price(balance - price)}"
             )
-            await callback.message.edit_text(text, reply_markup=_back_kb(lang, "menu:shop"))
+            await callback.message.edit_text(text, reply_markup=_back_kb(lang, "menu:shop", labels))
             await callback.answer()
             return
     except Exception:
         logger.exception("SubWorld buy failed")
-        await callback.message.edit_text(_t(lang, "store_unavailable"), reply_markup=_back_kb(lang, back_target))
+        await callback.message.edit_text(_t(lang, "store_unavailable"), reply_markup=_back_kb(lang, back_target, labels))
         await callback.answer()
         return

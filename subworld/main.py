@@ -14,7 +14,12 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import CommandStart
 from aiogram.fsm.storage.memory import MemoryStorage
 
-from .buttons import edit_main_menu, ensure_default_buttons, send_main_menu
+from .buttons import (
+    edit_main_menu,
+    ensure_default_buttons,
+    ensure_default_labels,
+    send_main_menu,
+)
 from .catalog import catalog_router
 from .keyboards import (
     CHOOSE_TEXT,
@@ -111,6 +116,7 @@ async def main() -> None:
             await ensure_suppliers_seeded()
             await ensure_featured_subscriptions_seeded()
             await ensure_default_buttons()
+            await ensure_default_labels()
             db_ready = True
             logger.info("SubWorld DB ready.")
         except Exception:

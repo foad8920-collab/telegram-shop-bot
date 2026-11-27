@@ -15,7 +15,7 @@ from starlette.applications import Starlette
 from starlette.responses import RedirectResponse
 from starlette.routing import Route
 
-from .button_models import BotButton, BotRule
+from .button_models import BotButton, BotLabel, BotRule
 from .db import get_engine
 from .models import Category, Order, Product, ProductCode, SubworldUser
 from .supplier_models import (
@@ -466,7 +466,7 @@ class OrderAdmin(ModelView, model=Order):
 class BotButtonAdmin(ModelView, model=BotButton):
     """Main-menu buttons, exactly like the Yemen panel's bot-button list.
 
-    The bot builds its reply keyboard from these rows: menu_name groups
+    The bot builds its inline menu from these rows: menu_name groups
     buttons into a menu, sort_order sets the order, full_width puts a
     button alone in its row (otherwise two share a row), and style
     colours it - primary (blue), success (green), danger (red).
@@ -549,6 +549,41 @@ class BotRuleAdmin(ModelView, model=BotRule):
     page_size = 25
 
 
+class BotLabelAdmin(ModelView, model=BotLabel):
+    """Fixed store buttons (back, main menu, previous, next, buy, show
+    all): their Arabic/English text and colour, editable here. Do not
+    rename a key - a renamed key just loses its override and the bot
+    falls back to the built-in text."""
+
+    name = "أزرار المتجر"
+    name_plural = "أزرار المتجر"
+    icon = "fa-solid fa-sliders"
+
+    column_list = [
+        BotLabel.id,
+        BotLabel.key,
+        BotLabel.text_ar,
+        BotLabel.text_en,
+        BotLabel.style,
+    ]
+    column_searchable_list = [BotLabel.key, BotLabel.text_ar]
+    column_sortable_list = [BotLabel.id, BotLabel.key]
+    column_default_sort = [("id", False)]
+    column_labels = {
+        "id": "id",
+        "key": "المفتاح",
+        "text_ar": "النص",
+        "text_en": "النص (إنجليزي)",
+        "style": "اللون",
+    }
+    form_columns = ["key", "text_ar", "text_en", "style"]
+    form_args = {
+        "key": {"description": "لا تغيّر المفتاح — تغييره يلغي التخصيص ويعيد النص الافتراضي"},
+        "style": {"description": "primary (أزرق) أو success (أخضر) أو danger (أحمر)"},
+    }
+    page_size = 25
+
+
 def create_subworld_admin_app() -> Starlette:
     """Build the SubWorld admin panel as its own Starlette app.
 
@@ -595,6 +630,7 @@ def create_subworld_admin_app() -> Starlette:
         OrderAdmin,
         BotButtonAdmin,
         BotRuleAdmin,
+        BotLabelAdmin,
     ):
         admin.add_view(view)
     return app
