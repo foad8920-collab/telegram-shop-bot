@@ -6,9 +6,11 @@ Alembic migrations come later if the schema grows.
 """
 import os
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.pool import NullPool
 
 
 class Base(DeclarativeBase):
@@ -41,16 +43,36 @@ def get_engine():
         url = os.environ.get("SUBWORLD_DATABASE_URL", "").strip()
         if not url:
             raise RuntimeError("SUBWORLD_DATABASE_URL is not set")
-        # statement_cache_size=0: Supabase's Transaction pooler (PgBouncer,
-        # port 6543) does not support prepared statements - without this the
-        # first query can fail with DuplicatePreparedStatementError when a
-        # server connection is reused (seen live 2026-11-27 13:09 UTC).
+        # PgBouncer fix (live 2026-11-27 13:28-13:29 UTC): the admin list
+        # pages failed with DuplicatePreparedStatementError on
+        # SELECT count(...) - even with statement_cache_size=0.
+        #
+        # Why that did not work: SQLAlchemy's asyncpg dialect calls
+        # connection.prepare() for EVERY statement, naming it
+        # __asyncpg_stmt_<hex counter>__. statement_cache_size=0 only
+        # disables asyncpg's own client-side cache - it does not stop the
+        # dialect from preparing named statements, and a name left behind
+        # on a PgBouncer-reused server session collides with the next
+        # client's counter (live names: __asyncpg_stmt_29__,
+        # __asyncpg_stmt_2a__).
+        #
+        # The documented SQLAlchemy recipe for PgBouncer (transaction
+        # mode): give every prepared statement a UNIQUE name
+        # (prepared_statement_name_func -> UUID, so a name can never
+        # collide with a leftover), and do not pool connections
+        # client-side (NullPool - PgBouncer does the pooling; each
+        # checkout gets a fresh connection and PgBouncer discards its
+        # prepared statements on return). statement_cache_size=0 is kept
+        # as well. pool_pre_ping stays on so a stale pooled connection
+        # is detected before use.
         _engine = create_async_engine(
             _normalize_url(url),
-            pool_size=5,
-            max_overflow=10,
+            poolclass=NullPool,
             pool_pre_ping=True,
-            connect_args={"statement_cache_size": 0},
+            connect_args={
+                "statement_cache_size": 0,
+                "prepared_statement_name_func": lambda: f"__asyncpg_{uuid4()}__",
+            },
         )
     return _engine
 
