@@ -21,7 +21,7 @@ import logging
 from decimal import Decimal
 
 from aiogram import types
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from .button_models import (
     BUTTON_STYLES,
@@ -188,51 +188,142 @@ async def ensure_default_labels() -> None:
         logger.info("SubWorld default button labels seeded (%d labels)", len(DEFAULT_LABELS))
 
 
-async def ensure_rules_seeded() -> int:
-    """Copy the Yemen bot's rules into SubWorld on first run only.
+# The final SubWorld rules (Arabic, English), adapted from the Yemen
+# bot's 18 rules: SubWorld name, USD + Binance/crypto/wallet payment,
+# no Yemeni-law reference in disputes, no email anywhere (everything
+# runs through the Telegram account or Binance), and no cash refunds
+# at all - a problem is compensated with wallet credit instead.
+# Rule 1's Arabic text is the sentinel: if it is already in the
+# table, the adapted set is in place and nothing is touched.
+SUBWORLD_RULES: tuple[tuple[str, str], ...] = (
+    (
+        "SubWorld — عالم الاشتراكات وسيط لبيع الاشتراكات الرقمية، وهو جهة مستقلة وغير تابعة لـ Google أو OpenAI أو أي مزوّد آخر، وجميع العلامات التجارية ملك لأصحابها.",
+        "SubWorld is an independent reseller of digital subscriptions and is not affiliated with Google, OpenAI, or any other provider. All trademarks belong to their respective owners.",
+    ),
+    (
+        "استخدام البوت والشراء منه يعني موافقتك الكاملة على هذه القوانين، ومن لا يوافق عليها يجب عليه عدم إتمام الطلب.",
+        "Using the bot and purchasing from it means you fully accept these rules. If you do not agree, do not complete your order.",
+    ),
+    (
+        "يجب أن يكون عمر العميل 18 سنة فأكثر، أو أن يتم الشراء بموافقة ولي أمره، وهو مسؤول عن حسابه وطلباته.",
+        "You must be 18 years or older, or purchase with a guardian's consent. You are responsible for your account and your orders.",
+    ),
+    (
+        "العميل مسؤول عن صحة بياناته، مثل معرف حسابه في تليجرام ورقم التواصل، وأي خطأ في البيانات يتحمل نتيجته.",
+        "You are responsible for the accuracy of your details, such as your Telegram username and contact number. Any mistake in your details is your responsibility.",
+    ),
+    (
+        "الأسعار المعلنة وقت الطلب هي المعتمدة، والدفع مقدم بالدولار الأمريكي عبر طرق الدفع المتاحة في البوت (بينانس، العملات الرقمية، المحفظة)، ولا يبدأ تنفيذ الطلب قبل تأكيد الدفع.",
+        "The prices shown at the time of ordering are the applicable ones. Payment is made in advance in US dollars through the payment methods available in the bot (Binance, cryptocurrency, wallet), and your order is not processed until payment is confirmed.",
+    ),
+    (
+        "التسليم رقمي عبر البوت خلال المدة المعلنة، ويجب على العميل فحص المنتج فور استلامه والإبلاغ عن أي مشكلة خلال 24 ساعة.",
+        "Delivery is digital, through the bot, within the stated time. You must check the product immediately upon receipt and report any problem within 24 hours.",
+    ),
+    (
+        "الأكواد والحسابات المسلّمة سرية خاصة بالعميل، ومشاركتها مع غيره أو فقدانها بسبب إهماله تقع على مسؤوليته ولا يترتب عليها تعويض.",
+        "Delivered codes and accounts are confidential and for your use only. Sharing them with others or losing them through your own negligence is your responsibility and does not entitle you to compensation.",
+    ),
+    (
+        "يلتزم العميل بشروط المزوّد الأصلي للخدمة، ويمنع استخدام الاشتراك في أي نشاط غير قانوني أو احتيال أو إرسال مزعج أو انتهاك لحقوق الغير.",
+        "You must comply with the original provider's terms of service. Using a subscription for any illegal activity, fraud, spam, or infringement of others' rights is prohibited.",
+    ),
+    (
+        "إذا أوقف المزوّد الحساب بسبب سوء استخدام العميل أو مخالفته لشروط المزوّد، فلا يشمل ذلك الضمان ولا يحق للعميل أي تعويض.",
+        "If the provider suspends the account because of your misuse or violation of the provider's terms, this is not covered by the warranty and you are not entitled to any compensation.",
+    ),
+    (
+        "لا يجوز إعادة بيع الاشتراك أو مشاركته أو تأجيره لغير العميل، إلا إذا كان نوع الاشتراك يسمح بذلك صراحة.",
+        "You may not resell, share, or rent out a subscription to anyone else, unless the subscription type explicitly allows it.",
+    ),
+    (
+        "الضمان يشمل عيبا في التسليم نفسه خلال فترة الضمان المعلنة فقط، ولا يشمل انقطاع خدمة المزوّد أو تغيير مزاياه أو سوء استخدام العميل.",
+        "The warranty covers only a defect in the delivery itself, during the stated warranty period. It does not cover interruptions of the provider's service, changes to its features, or your misuse.",
+    ),
+    (
+        "المنتجات الرقمية بعد تسليمها وتفعيلها لا تسترد، ويستثنى من ذلك عدم التسليم أو منتج معيب لم يعمل من الأساس، بعد إثبات ذلك خلال 48 ساعة، ويكون الحل استبدالا أو إضافة المبلغ إلى رصيد محفظة العميل حسب تقدير الإدارة.",
+        "Digital products are non-refundable after delivery and activation, except in the case of non-delivery or a product that never worked, proven within 48 hours. The remedy is a replacement or adding the amount to the customer's wallet balance, at management's discretion.",
+    ),
+    (
+        "البوت لا يضمن استمرار خدمة أي طرف ثالث، وإذا أوقف المزوّد خدمته كليا يقتصر أي تعويض، إن وجد، على إضافة قيمة المدة المتبقية غير المستخدمة إلى رصيد محفظة العميل حسب تقدير الإدارة.",
+        "The bot does not guarantee the continued service of any third party. If a provider discontinues its service entirely, any compensation, if applicable, is limited to adding the value of the remaining unused period to the customer's wallet balance, at management's discretion.",
+    ),
+    (
+        "للإدارة حق تعديل الأسعار والمنتجات وهذه القوانين بإشعار داخل البوت، والطلبات المؤكدة قبل التعديل تبقى على سعرها وشروطها.",
+        "Management may change prices, products, and these rules, with notice inside the bot. Orders confirmed before a change keep their price and terms.",
+    ),
+    (
+        "بيانات العميل تستخدم فقط لتنفيذ الطلب وتقديم الدعم، ولا تباع ولا تشارك إلا عند الضرورة لتنفيذ الطلب أو بموجب طلب قانوني.",
+        "Your details are used only to fulfil your order and provide support. They are never sold, and are shared only when necessary to fulfil the order or when required by law.",
+    ),
+    (
+        "للإدارة حق رفض أو إيقاف أي طلب أو حساب عند إساءة الاستخدام أو الاحتيال أو مخالفة هذه القوانين، دون إخلال برصيد محفظة العميل غير المستخدم.",
+        "Management may refuse or suspend any order or account in cases of misuse, fraud, or violation of these rules, without prejudice to the customer's unused wallet balance.",
+    ),
+    (
+        "أقصى مسؤولية للبوت عن أي طلب هي قيمة ذلك الطلب نفسه، ولا يتحمل أي أضرار غير مباشرة أو خسارة أرباح أو بيانات.",
+        "The bot's maximum liability for any order is the value of that order itself. It is not liable for any indirect damages or loss of profits or data.",
+    ),
+    (
+        "عند أي نزاع يجب التواصل مع الدعم عبر البوت أولا مع الاحتفاظ برقم الطلب وإثبات الدفع، وتحل النزاعات وديا.",
+        "In case of any dispute, contact support through the bot first, keeping your order number and proof of payment. Disputes are resolved amicably.",
+    ),
+    (
+        "الدفع بالعملات الرقمية نهائي بعد تأكيده على الشبكة. يجب إرسال المبلغ الدقيق إلى العنوان الدقيق الظاهر في الطلب وعلى نفس الشبكة؛ والإرسال إلى عنوان خاطئ أو شبكة مختلفة أو بمبلغ مختلف مسؤولية العميل ولا يسترد.",
+        "Cryptocurrency payments are final once confirmed on the network. You must send the exact amount to the exact address shown in the order, on the same network. Sending to a wrong address, a different network, or a different amount is your responsibility and is not refundable.",
+    ),
+    (
+        "رصيد المحفظة غير قابل للتحويل لعميل آخر ولا يسترد نقدا، ويُضاف الرصيد بعد تأكيد الدفع.",
+        "Wallet balance cannot be transferred to another customer and is not refundable in cash. Balance is credited after payment is confirmed.",
+    ),
+    (
+        "الدعم متوفر باللغتين العربية والإنجليزية.",
+        "Support is available in Arabic and English.",
+    ),
+    (
+        "جميع الأسعار بالدولار الأمريكي، وأي سعر يظهر بعملة أخرى فهو استرشادي فقط وقد يختلف حسب سعر الصرف.",
+        "All prices are in US dollars. Any price shown in another currency is indicative only and may vary with the exchange rate.",
+    ),
+    (
+        "لا يستطيع أي عميل استرداد المبالغ نقدا في حال حصل أي خلل؛ بل تُضاف المبالغ إلى رصيد محفظته في البوت ويستطيع شراء أي منتج آخر بها.",
+        "No customer can receive a cash refund if any problem occurs. Instead, the amount is added to their wallet balance in the bot, and they can use it to buy any other product.",
+    ),
+)
 
-    Runs only when the SubWorld rules table is empty, so rules the
-    user already added in SubWorld are never overwritten. The Yemen
-    rules have one text field (Arabic); it becomes text_ar and text_en
-    stays empty, so English users see the Arabic text - the same
-    fallback as a rule without an English translation (he can fill in
-    the English text per rule in the panel afterwards). Order and the
-    active state are preserved. Same mechanism as the featured
-    subscriptions seeding. Returns the number of rules seeded (0 if
-    already seeded or skipped)."""
+_ADAPTED_RULES_SENTINEL = SUBWORLD_RULES[0][0]
+
+
+async def ensure_rules_seeded() -> int:
+    """Seed the adapted SubWorld rules once, replacing the old set.
+
+    The first package (rules-v1) copied the 18 Yemen rules verbatim and
+    the user deployed it, so the table already holds them. The first
+    time this version runs it wipes the whole table and inserts the
+    adapted set (SUBWORLD_RULES, Arabic + English). Afterwards the
+    sentinel (adapted rule 1) is present, so later starts touch
+    nothing - rules the user adds or edits in the panel are safe.
+    Returns the number of rules written (0 if already in place or
+    skipped)."""
     try:
         async with _session() as session:
-            existing = (await session.execute(select(BotRule.id).limit(1))).first()
-            if existing is not None:
+            present = (await session.execute(
+                select(BotRule.id)
+                .where(BotRule.text_ar == _ADAPTED_RULES_SENTINEL)
+                .limit(1)
+            )).first()
+            if present is not None:
                 return 0
-
-        from bot.database.main import Database as YemenDatabase
-        from bot.database.models.main import BotRule as YemenBotRule
-
-        async with YemenDatabase().session() as ysession:
-            rows = (await ysession.execute(
-                select(YemenBotRule).order_by(YemenBotRule.sort_order, YemenBotRule.id)
-            )).scalars().all()
-            rows_data = [
-                {"text": r.text, "sort_order": r.sort_order or 0, "is_active": r.is_active}
-                for r in rows
-            ]
-
-        if not rows_data:
-            logger.warning("SubWorld rules seeding skipped: no rules in Yemen DB")
-            return 0
-
-        async with _session() as session:
-            for data in rows_data:
+            await session.execute(delete(BotRule))
+            for i, (text_ar, text_en) in enumerate(SUBWORLD_RULES, start=1):
                 session.add(BotRule(
-                    text_ar=data["text"],
-                    text_en=None,
-                    sort_order=data["sort_order"],
-                    is_active=data["is_active"],
+                    text_ar=text_ar,
+                    text_en=text_en,
+                    sort_order=i,
+                    is_active=True,
                 ))
             await session.commit()
-        logger.info("SubWorld rules seeded: %s rules from Yemen bot", len(rows_data))
-        return len(rows_data)
+        logger.info("SubWorld rules seeded: %s rules (adapted set)", len(SUBWORLD_RULES))
+        return len(SUBWORLD_RULES)
     except Exception as e:
         logger.warning("SubWorld rules seeding failed: %s", e)
         return 0
