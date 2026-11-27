@@ -14,13 +14,13 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import CommandStart
 from aiogram.fsm.storage.memory import MemoryStorage
 
+from .buttons import ensure_default_buttons, on_menu_button_text, send_main_menu
 from .catalog import catalog_router
 from .keyboards import (
     CHOOSE_TEXT,
     TEXTS,
     USER_LANG,
     choose_kb,
-    main_menu_kb,
 )
 
 logger = logging.getLogger("subworld")
@@ -29,7 +29,8 @@ logger = logging.getLogger("subworld")
 async def cmd_start(message: types.Message) -> None:
     lang = USER_LANG.get(message.from_user.id)
     if lang in TEXTS:
-        await message.answer(TEXTS[lang]["welcome"], reply_markup=main_menu_kb(lang))
+        # Main menu is the panel-driven reply keyboard (buttons.py).
+        await send_main_menu(message, lang)
     else:
         await message.answer(CHOOSE_TEXT, reply_markup=choose_kb())
 
@@ -44,7 +45,13 @@ async def on_lang(callback: types.CallbackQuery) -> None:
     if lang not in TEXTS:
         lang = "ar"
     USER_LANG[callback.from_user.id] = lang
-    await callback.message.edit_text(TEXTS[lang]["welcome"], reply_markup=main_menu_kb(lang))
+    try:
+        await callback.message.edit_text(
+            "✅ تم اختيار اللغة." if lang == "ar" else "✅ Language selected."
+        )
+    except Exception:
+        pass
+    await send_main_menu(callback.message, lang)
     await callback.answer()
 
 
@@ -69,6 +76,8 @@ async def _poll_once(token: str, db_ready: bool) -> None:
         await bot.delete_webhook(drop_pending_updates=False)
         dp = Dispatcher(storage=MemoryStorage())
         dp.message.register(cmd_start, CommandStart())
+        # Reply-keyboard presses arrive as the button's text.
+        dp.message.register(on_menu_button_text, F.text)
         dp.callback_query.register(on_lang, F.data.startswith("lang:"))
         dp.include_router(catalog_router)
         info = await bot.get_me()
@@ -105,6 +114,7 @@ async def main() -> None:
             await init_db()
             await ensure_suppliers_seeded()
             await ensure_featured_subscriptions_seeded()
+            await ensure_default_buttons()
             db_ready = True
             logger.info("SubWorld DB ready.")
         except Exception:

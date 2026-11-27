@@ -88,6 +88,7 @@ def get_session_factory():
 
 async def init_db() -> None:
     """Create SubWorld tables if they do not exist yet."""
+    import subworld.button_models  # noqa: F401  (registers button/rule tables)
     import subworld.models  # noqa: F401  (registers the models on Base)
     import subworld.supplier_models  # noqa: F401  (registers supplier tables)
 

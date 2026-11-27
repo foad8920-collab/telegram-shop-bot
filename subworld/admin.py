@@ -15,6 +15,7 @@ from starlette.applications import Starlette
 from starlette.responses import RedirectResponse
 from starlette.routing import Route
 
+from .button_models import BotButton, BotRule
 from .db import get_engine
 from .models import Category, Order, Product, ProductCode, SubworldUser
 from .supplier_models import (
@@ -462,6 +463,92 @@ class OrderAdmin(ModelView, model=Order):
     page_size = 25
 
 
+class BotButtonAdmin(ModelView, model=BotButton):
+    """Main-menu buttons, exactly like the Yemen panel's bot-button list.
+
+    The bot builds its reply keyboard from these rows: menu_name groups
+    buttons into a menu, sort_order sets the order, full_width puts a
+    button alone in its row (otherwise two share a row), and style
+    colours it - primary (blue), success (green), danger (red).
+    """
+
+    name = "أزرار البوت"
+    name_plural = "أزرار البوت"
+    icon = "fa-solid fa-hand-pointer"
+
+    column_list = [
+        BotButton.id,
+        BotButton.menu_name,
+        BotButton.button_text,
+        BotButton.callback_data,
+        BotButton.url,
+        BotButton.style,
+        BotButton.sort_order,
+        BotButton.is_active,
+    ]
+    column_searchable_list = [BotButton.button_text, BotButton.menu_name, BotButton.callback_data]
+    column_sortable_list = [BotButton.id, BotButton.menu_name, BotButton.sort_order, BotButton.is_active]
+    column_default_sort = [("sort_order", False), ("id", False)]
+    column_labels = {
+        "id": "id",
+        "menu_name": "القائمة",
+        "button_text": "النص",
+        "button_text_en": "النص (إنجليزي)",
+        "callback_data": "callback_data",
+        "url": "الرابط",
+        "style": "اللون",
+        "icon_custom_emoji_id": "أيقونة مخصصة",
+        "full_width": "بعرض كامل",
+        "sort_order": "الترتيب",
+        "is_active": "مفعل",
+    }
+    form_columns = [
+        "menu_name",
+        "button_text",
+        "button_text_en",
+        "callback_data",
+        "url",
+        "style",
+        "icon_custom_emoji_id",
+        "full_width",
+        "sort_order",
+        "is_active",
+    ]
+    form_args = {
+        "style": {"description": "primary (أزرق) أو success (أخضر) أو danger (أحمر) — فارغ يعني الافتراضي"},
+        "icon_custom_emoji_id": {"description": "معرّف إيموجي مخصص — يحتاج Telegram Premium لصاحب البوت"},
+        "full_width": {"description": "فعّله ليأخذ الزر صفا كاملا وحده، وإلا يتشارك الصف مع زر آخر"},
+    }
+    page_size = 25
+
+
+class BotRuleAdmin(ModelView, model=BotRule):
+    """Bot rules shown to users (the Rules menu button reads this table)."""
+
+    name = "قوانين البوت"
+    name_plural = "قوانين البوت"
+    icon = "fa-solid fa-scroll"
+
+    column_list = [
+        BotRule.id,
+        BotRule.text_ar,
+        BotRule.sort_order,
+        BotRule.is_active,
+    ]
+    column_searchable_list = [BotRule.text_ar]
+    column_sortable_list = [BotRule.id, BotRule.sort_order, BotRule.is_active]
+    column_default_sort = [("sort_order", False), ("id", False)]
+    column_labels = {
+        "id": "id",
+        "text_ar": "النص",
+        "text_en": "النص (إنجليزي)",
+        "sort_order": "الترتيب",
+        "is_active": "مفعل",
+    }
+    form_columns = ["text_ar", "text_en", "sort_order", "is_active"]
+    page_size = 25
+
+
 def create_subworld_admin_app() -> Starlette:
     """Build the SubWorld admin panel as its own Starlette app.
 
@@ -506,6 +593,8 @@ def create_subworld_admin_app() -> Starlette:
         CategoryAdmin,
         SubworldUserAdmin,
         OrderAdmin,
+        BotButtonAdmin,
+        BotRuleAdmin,
     ):
         admin.add_view(view)
     return app
