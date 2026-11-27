@@ -5,6 +5,7 @@ Tables are created with Base.metadata.create_all on first start (v1);
 Alembic migrations come later if the schema grows.
 """
 import os
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
@@ -18,6 +19,22 @@ _engine = None
 _session_factory = None
 
 
+def _normalize_url(url: str) -> str:
+    """Force the asyncpg driver.
+
+    Supabase gives a plain postgresql:// URL, which SQLAlchemy's async
+    engine resolves to psycopg2 - not installed in this service (the
+    Yemen bot uses asyncpg). Also drop sslmode, which asyncpg does not
+    accept as a connect argument.
+    """
+    parsed = urlparse(url)
+    scheme = parsed.scheme
+    if scheme in ("postgresql", "postgres"):
+        scheme = "postgresql+asyncpg"
+    query = [(k, v) for k, v in parse_qsl(parsed.query) if k.lower() != "sslmode"]
+    return urlunparse(parsed._replace(scheme=scheme, query=urlencode(query)))
+
+
 def get_engine():
     global _engine
     if _engine is None:
@@ -25,7 +42,7 @@ def get_engine():
         if not url:
             raise RuntimeError("SUBWORLD_DATABASE_URL is not set")
         _engine = create_async_engine(
-            url, pool_size=5, max_overflow=10, pool_pre_ping=True
+            _normalize_url(url), pool_size=5, max_overflow=10, pool_pre_ping=True
         )
     return _engine
 
