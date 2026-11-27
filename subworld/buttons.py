@@ -74,11 +74,28 @@ def build_inline_kb(buttons, lang: str) -> types.InlineKeyboardMarkup:
 
     for b in buttons:
         kwargs: dict = {}
+        text = b.text_for(lang).strip()
+        if not text:
+            logger.warning("SubWorld menu button id=%s has no text, skipped", b.id)
+            continue
         style = (b.style or "").strip().lower()
         if style in BUTTON_STYLES:
             kwargs["style"] = style
-        if (b.icon_custom_emoji_id or "").strip():
-            kwargs["icon_custom_emoji_id"] = b.icon_custom_emoji_id.strip()
+        # A custom-emoji id must be a plain ASCII number (Telegram
+        # rejects anything else and kills the WHOLE keyboard with
+        # "icon_custom_emoji_id must be a valid Number"). A bad value
+        # typed in the panel must never break the menu, so it is
+        # dropped with a warning instead of being sent.
+        icon = (b.icon_custom_emoji_id or "").strip()
+        if icon:
+            if icon.isascii() and icon.isdigit():
+                kwargs["icon_custom_emoji_id"] = icon
+            else:
+                logger.warning(
+                    "SubWorld menu button %r has an invalid icon %r (must be a numeric custom-emoji id), ignored",
+                    b.button_text,
+                    icon,
+                )
         url = (b.url or "").strip()
         action = (b.callback_data or "").strip()
         if url:
@@ -248,19 +265,24 @@ async def send_main_menu(message: types.Message, lang: str, user=None) -> None:
     """Welcome (Yemen-style) + the panel-driven inline menu, as a new
     message (used by /start).
 
-    The welcome is sent first carrying ReplyKeyboardRemove, which
-    clears the old reply keyboard left by the pre-v2 menu (a reply
-    keyboard stays docked below the input box until the bot removes
-    it); the inline menu is then attached to the same message, so the
-    chat gets exactly one message and no leftover keyboard."""
+    The welcome is sent WITH the inline menu attached. The old reply
+    keyboard left by the pre-v2 menu is removed by a second, transient
+    message carrying ReplyKeyboardRemove, deleted at once - a message
+    has one reply_markup, and trying to attach the inline menu to the
+    remove-message afterwards fails with Telegram's "message can't be
+    edited" (seen twice in the Render log) and the fallback then sent
+    a duplicate welcome. A reply keyboard stays docked below the input
+    box until the bot removes it, so this one-time removal stays."""
     tg_user = user or message.from_user
     text, kb = await _main_menu_content(lang, tg_user)
-    sent = await message.answer(text, reply_markup=types.ReplyKeyboardRemove())
+    await message.answer(text, reply_markup=kb)
     try:
-        await sent.edit_reply_markup(reply_markup=kb)
+        tmp = await message.answer(
+            "✅ تم تحديث القائمة", reply_markup=types.ReplyKeyboardRemove()
+        )
+        await tmp.delete()
     except Exception:
-        logger.exception("SubWorld attach inline menu failed, sending menu again")
-        await message.answer(text, reply_markup=kb)
+        logger.debug("SubWorld old keyboard removal skipped", exc_info=True)
 
 
 async def edit_main_menu(callback: types.CallbackQuery, lang: str) -> None:

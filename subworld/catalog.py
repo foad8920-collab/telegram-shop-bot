@@ -23,7 +23,7 @@ from decimal import Decimal
 from aiogram import F, Router, types
 from sqlalchemy import func, select
 
-from .button_models import DEFAULT_LABELS, label_text, load_labels
+from .button_models import DEFAULT_LABELS, BotButton, label_text, load_labels
 from .db import get_session_factory
 from .keyboards import CHOOSE_TEXT, TEXTS, choose_kb, get_lang, main_menu_kb
 from .models import Order, Product, ProductCode, SubworldUser
@@ -848,3 +848,39 @@ async def on_buy(callback: types.CallbackQuery) -> None:
         await callback.message.edit_text(_t(lang, "store_unavailable"), reply_markup=_back_kb(lang, back_target, labels))
         await callback.answer()
         return
+
+
+# ============================================================
+#  Panel buttons with no handler yet
+# ============================================================
+
+@catalog_router.callback_query()
+async def on_unwired_button(callback: types.CallbackQuery) -> None:
+    """Last resort, registered after every other catalog handler: a
+    panel button whose callback_data has no handler (e.g. a support
+    button with no link). Answer with a toast telling the user what is
+    missing, instead of leaving the button dead. Callbacks that are
+    not panel buttons are passed on to the next handler."""
+    from aiogram.dispatcher.event.bases import SkipHandler
+
+    data = (callback.data or "").strip()
+    try:
+        async with _session() as session:
+            found = (
+                await session.execute(
+                    select(BotButton.id)
+                    .where(BotButton.callback_data == data)
+                    .limit(1)
+                )
+            ).scalars().first()
+    except Exception:
+        logger.exception("SubWorld unwired-button lookup failed")
+        found = None
+    if found is None:
+        raise SkipHandler
+    lang = get_lang(callback.from_user.id)
+    await callback.answer(
+        "هذا الزر غير مفعّل بعد — أضف رابطه من لوحة التحكم."
+        if lang == "ar"
+        else "This button is not wired yet — add its link from the admin panel."
+    )
