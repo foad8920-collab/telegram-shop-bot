@@ -1,8 +1,9 @@
 """SubWorldStoreBot - the main bot (standalone package).
 
 No imports from the Yemen bot package, so the Yemen bot can be retired
-later without touching this code. v1: /start with Arabic/English choice
-only. No database yet.
+later without touching this code. Catalog, wallet and supplier sync
+live in the subworld package; the Yemen bot's own code is only used
+for the supplier API clients (same process, same env keys).
 """
 import asyncio
 import logging
@@ -13,60 +14,22 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import CommandStart
 from aiogram.fsm.storage.memory import MemoryStorage
 
-logger = logging.getLogger("subworld")
-
-USER_LANG: dict[int, str] = {}
-
-CHOOSE_TEXT = (
-    "أهلا بك في SubWorld - عالم الاشتراكات الرقمية\n"
-    "Welcome to SubWorld - Digital Subscriptions World\n"
-    "اختر لغتك / Choose your language:"
+from .catalog import catalog_router
+from .keyboards import (
+    CHOOSE_TEXT,
+    TEXTS,
+    USER_LANG,
+    choose_kb,
+    main_menu_kb,
 )
 
-TEXTS = {
-    "ar": {
-        "welcome": (
-            "أهلا بك في SubWorld - عالم الاشتراكات الرقمية\n"
-            "المتجر قيد البناء، وسنضيف المنتجات قريبا."
-        ),
-    },
-    "en": {
-        "welcome": (
-            "Welcome to SubWorld - Digital Subscriptions World\n"
-            "The store is under construction, products coming soon."
-        ),
-    },
-}
-
-
-def choose_kb() -> types.InlineKeyboardMarkup:
-    return types.InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                types.InlineKeyboardButton(text="العربية", callback_data="lang:ar"),
-                types.InlineKeyboardButton(text="English", callback_data="lang:en"),
-            ]
-        ]
-    )
-
-
-def switch_kb() -> types.InlineKeyboardMarkup:
-    return types.InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                types.InlineKeyboardButton(
-                    text="تغيير اللغة / Change language",
-                    callback_data="lang:choose",
-                )
-            ]
-        ]
-    )
+logger = logging.getLogger("subworld")
 
 
 async def cmd_start(message: types.Message) -> None:
     lang = USER_LANG.get(message.from_user.id)
     if lang in TEXTS:
-        await message.answer(TEXTS[lang]["welcome"], reply_markup=switch_kb())
+        await message.answer(TEXTS[lang]["welcome"], reply_markup=main_menu_kb(lang))
     else:
         await message.answer(CHOOSE_TEXT, reply_markup=choose_kb())
 
@@ -81,11 +44,24 @@ async def on_lang(callback: types.CallbackQuery) -> None:
     if lang not in TEXTS:
         lang = "ar"
     USER_LANG[callback.from_user.id] = lang
-    await callback.message.edit_text(TEXTS[lang]["welcome"], reply_markup=switch_kb())
+    await callback.message.edit_text(TEXTS[lang]["welcome"], reply_markup=main_menu_kb(lang))
     await callback.answer()
 
 
-async def _poll_once(token: str) -> None:
+async def _sync_loop(bot: Bot) -> None:
+    """Sync all suppliers every 30 minutes (first run after 60s)."""
+    from .supplier_sync import sync_all_suppliers
+
+    await asyncio.sleep(60)
+    while True:
+        try:
+            await sync_all_suppliers(bot=bot)
+        except Exception:
+            logger.exception("SubWorld scheduled sync failed")
+        await asyncio.sleep(1800)
+
+
+async def _poll_once(token: str, db_ready: bool) -> None:
     async with Bot(
         token=token,
         default=DefaultBotProperties(parse_mode="HTML"),
@@ -94,10 +70,22 @@ async def _poll_once(token: str) -> None:
         dp = Dispatcher(storage=MemoryStorage())
         dp.message.register(cmd_start, CommandStart())
         dp.callback_query.register(on_lang, F.data.startswith("lang:"))
+        dp.include_router(catalog_router)
         info = await bot.get_me()
         logger.info("SubWorld bot started: @%s", info.username)
-        # handle_signals=False: the shop bot owns signal handling already.
-        await dp.start_polling(bot, handle_signals=False)
+        sync_task = None
+        if db_ready:
+            sync_task = asyncio.create_task(_sync_loop(bot))
+        try:
+            # handle_signals=False: the shop bot owns signal handling already.
+            await dp.start_polling(bot, handle_signals=False)
+        finally:
+            if sync_task is not None:
+                sync_task.cancel()
+                try:
+                    await sync_task
+                except asyncio.CancelledError:
+                    pass
 
 
 async def main() -> None:
@@ -105,9 +93,27 @@ async def main() -> None:
     if not token:
         logger.warning("SUBWORLD_BOT_TOKEN is not set - SubWorld bot disabled.")
         return
+    db_ready = False
+    if os.environ.get("SUBWORLD_DATABASE_URL", "").strip():
+        try:
+            from .db import init_db
+            from .supplier_sync import (
+                ensure_featured_subscriptions_seeded,
+                ensure_suppliers_seeded,
+            )
+
+            await init_db()
+            await ensure_suppliers_seeded()
+            await ensure_featured_subscriptions_seeded()
+            db_ready = True
+            logger.info("SubWorld DB ready.")
+        except Exception:
+            logger.exception("SubWorld DB init failed - running without catalog")
+    else:
+        logger.warning("SUBWORLD_DATABASE_URL is not set - catalog disabled.")
     while True:
         try:
-            await _poll_once(token)
+            await _poll_once(token, db_ready)
         except asyncio.CancelledError:
             raise
         except Exception:
