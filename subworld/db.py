@@ -41,8 +41,16 @@ def get_engine():
         url = os.environ.get("SUBWORLD_DATABASE_URL", "").strip()
         if not url:
             raise RuntimeError("SUBWORLD_DATABASE_URL is not set")
+        # statement_cache_size=0: Supabase's Transaction pooler (PgBouncer,
+        # port 6543) does not support prepared statements - without this the
+        # first query can fail with DuplicatePreparedStatementError when a
+        # server connection is reused (seen live 2026-11-27 13:09 UTC).
         _engine = create_async_engine(
-            _normalize_url(url), pool_size=5, max_overflow=10, pool_pre_ping=True
+            _normalize_url(url),
+            pool_size=5,
+            max_overflow=10,
+            pool_pre_ping=True,
+            connect_args={"statement_cache_size": 0},
         )
     return _engine
 

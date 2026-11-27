@@ -468,7 +468,7 @@ def create_subworld_admin_app() -> Starlette:
     Mounted at /subworld by the Yemen bot's admin server. Same login as
     the Yemen panel (AdminAuth + SECRET_KEY); separate database.
     """
-    from bot.admin import AdminAuth
+    from bot.web.admin import AdminAuth
     from bot.misc import EnvKeys
 
     async def root_redirect(request):
