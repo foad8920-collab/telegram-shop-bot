@@ -465,16 +465,28 @@ class OrderAdmin(ModelView, model=Order):
 def create_subworld_admin_app() -> Starlette:
     """Build the SubWorld admin panel as its own Starlette app.
 
-    Mounted at /subworld by the Yemen bot's admin server. Same login as
-    the Yemen panel (AdminAuth + SECRET_KEY); separate database.
+    Served at /subworld by the Yemen bot's admin server through a small
+    ASGI dispatcher (see the mount block in bot/web/admin.py). Same login
+    as the Yemen panel (AdminAuth + SECRET_KEY); separate database.
+    The sub-app carries its own SessionMiddleware with the same settings
+    as the Yemen panel, because the dispatcher bypasses the parent app's
+    middleware stack.
     """
     from bot.web.admin import AdminAuth
     from bot.misc import EnvKeys
+    from starlette.middleware.sessions import SessionMiddleware
 
     async def root_redirect(request):
         return RedirectResponse(url="/subworld/admin/")
 
     app = Starlette(routes=[Route("/", root_redirect)])
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=EnvKeys.SECRET_KEY,
+        max_age=1800,
+        https_only=EnvKeys.session_cookie_secure(),
+        same_site="strict",
+    )
     admin = Admin(
         app,
         engine=get_engine(),
