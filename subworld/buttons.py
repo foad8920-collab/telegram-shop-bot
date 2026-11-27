@@ -15,6 +15,7 @@ answered with that link.
 from __future__ import annotations
 
 import logging
+from decimal import Decimal
 
 from aiogram import types
 from sqlalchemy import func, select
@@ -22,6 +23,7 @@ from sqlalchemy import func, select
 from .button_models import BUTTON_STYLES, MAIN_MENU_NAME, BotButton, BotRule
 from .db import get_session_factory
 from .keyboards import TEXTS, get_lang
+from .models import Order, SubworldUser
 
 logger = logging.getLogger("subworld.buttons")
 
@@ -128,18 +130,74 @@ async def ensure_default_buttons() -> None:
         logger.info("SubWorld default menu buttons seeded (4 buttons)")
 
 
-async def send_main_menu(message: types.Message, lang: str) -> None:
-    """Welcome text + the panel-driven reply keyboard. Falls back to
-    the inline menu when the database is unavailable."""
+async def _welcome_stats(user_id: int):
+    """(balance_usd, purchase_count) from the DB; (None, None) when the
+    database is unavailable. Purchases count every order (delivered
+    and pending - the balance is already deducted when the order is
+    created), like the Yemen bot's all-sources counter."""
+    try:
+        async with _session() as session:
+            user = await session.get(SubworldUser, user_id)
+            balance = Decimal(str(user.balance_usd or 0)) if user else Decimal("0")
+            count = (
+                await session.execute(
+                    select(func.count()).select_from(Order).where(Order.user_id == user_id)
+                )
+            ).scalar_one()
+            return balance, count
+    except Exception:
+        logger.exception("SubWorld welcome stats failed")
+        return None, None
+
+
+def _welcome_text(lang: str, name: str, balance: Decimal, count: int) -> str:
+    """Welcome exactly like the Yemen bot's: greeting + balance +
+    purchases + 'choose from the menu below' (USD only)."""
+    if lang == "en":
+        greeting = f"🎉 Welcome, {name}!" if name else "🎉 Welcome!"
+        purchases = "1 purchase" if count == 1 else f"{count} purchases"
+        return (
+            f"{greeting}\n\n"
+            f"💎 Balance: ${balance:.2f}\n"
+            f"🛍️ Purchases: {purchases}\n\n"
+            "Choose from the menu below:"
+        )
+    greeting = f"🎉 أهلاً بك! {name}" if name else "🎉 أهلاً بك!"
+    if count == 1:
+        purchases = "مشترى واحد"
+    elif count == 2:
+        purchases = "مشتريان"
+    else:
+        purchases = str(count)
+    return (
+        f"{greeting}\n\n"
+        f"💎 رصيدك: ${balance:.2f}\n"
+        f"🛍️ مشترياتك: {purchases}\n\n"
+        "اختر من القائمة أدناه:"
+    )
+
+
+async def send_main_menu(message: types.Message, lang: str, user=None) -> None:
+    """Welcome (Yemen-style) + the panel-driven reply keyboard. Falls
+    back to the static welcome + inline menu when the database is
+    unavailable. `user` is the Telegram user (needed because
+    callback.message.from_user is the bot, not the user)."""
     from .keyboards import main_menu_kb
 
+    tg_user = user or message.from_user
+    name = ""
+    if tg_user is not None:
+        name = (tg_user.first_name or tg_user.username or "").strip()
     try:
         async with _session() as session:
             buttons = await load_menu_buttons(session)
         if buttons:
-            await message.answer(
-                TEXTS[lang]["welcome"], reply_markup=build_reply_kb(buttons, lang)
-            )
+            balance, count = await _welcome_stats(tg_user.id)
+            if balance is None:
+                text = TEXTS[lang]["welcome"]
+            else:
+                text = _welcome_text(lang, name, balance, count)
+            await message.answer(text, reply_markup=build_reply_kb(buttons, lang))
             return
     except Exception:
         logger.exception("SubWorld main menu from panel failed, using inline fallback")

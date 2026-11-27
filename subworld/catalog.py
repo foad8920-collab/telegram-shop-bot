@@ -10,8 +10,8 @@ Store lists are paginated (10 products per page) with next/previous
 buttons. Supplier stores first show their categories; a product moved
 to Featured in the admin panel (show_in_local) appears in the Featured
 list instead of its supplier store. Stock is marked 🟢 in stock /
-🔴 out of stock on every product button (Telegram buttons have no
-colour - the dot is the marker).
+🔴 out of stock on every product button (inline buttons use the dot;
+the main menu's reply-keyboard buttons use Bot API 9.4 styles).
 """
 from __future__ import annotations
 
@@ -110,6 +110,20 @@ def _paginate(items: list, page: int, per_page: int = PAGE_SIZE):
     return items[start:start + per_page], pages, page
 
 
+async def _safe_edit(callback: types.CallbackQuery, text: str, reply_markup) -> None:
+    """Edit a message, silently ignoring 'message is not modified'
+    (double-tap, or Back to the screen already shown). Any other
+    Telegram error is re-raised so real failures stay visible."""
+    from aiogram.exceptions import TelegramBadRequest
+
+    try:
+        await callback.message.edit_text(text, reply_markup=reply_markup)
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
+        logger.debug("SubWorld edit skipped: message not modified")
+
+
 def _supplier_buyable(product: SupplierProduct) -> bool:
     """True when the product can actually be bought right now."""
     if not product.is_available:
@@ -176,7 +190,7 @@ async def on_menu_main(callback: types.CallbackQuery) -> None:
         pass
     from .buttons import send_main_menu
 
-    await send_main_menu(callback.message, lang)
+    await send_main_menu(callback.message, lang, callback.from_user)
     await callback.answer()
 
 
@@ -411,12 +425,12 @@ async def on_supplier_categories(callback: types.CallbackQuery) -> None:
             )).scalar_one()
     except Exception:
         logger.exception("SubWorld supplier categories failed")
-        await callback.message.edit_text(_t(lang, "store_unavailable"), reply_markup=_back_kb(lang, "menu:shop"))
+        await _safe_edit(callback, _t(lang, "store_unavailable"), _back_kb(lang, "menu:shop"))
         await callback.answer()
         return
     title = (supplier.display_name or supplier.name) if supplier else f"Supplier {supplier_id}"
     if total == 0:
-        await callback.message.edit_text(f"🏬 {title}\n{_t(lang, 'empty')}", reply_markup=_back_kb(lang, "menu:shop"))
+        await _safe_edit(callback, f"🏬 {title}\n{_t(lang, 'empty')}", _back_kb(lang, "menu:shop"))
         await callback.answer()
         return
     if len(cats) <= 1:
@@ -435,9 +449,10 @@ async def on_supplier_categories(callback: types.CallbackQuery) -> None:
         callback_data=f"shop:supa:{supplier_id}:1",
     )])
     buttons.append([types.InlineKeyboardButton(text=_t(lang, "back"), callback_data="menu:shop")])
-    await callback.message.edit_text(
+    await _safe_edit(
+        callback,
         f"🏬 {title}\n{_t(lang, 'categories')}",
-        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=buttons),
+        types.InlineKeyboardMarkup(inline_keyboard=buttons),
     )
     await callback.answer()
 
@@ -478,7 +493,7 @@ async def _render_supplier_products(
             )).scalars().all()
     except Exception:
         logger.exception("SubWorld supplier list failed")
-        await callback.message.edit_text(_t(lang, "store_unavailable"), reply_markup=_back_kb(lang, "menu:shop"))
+        await _safe_edit(callback, _t(lang, "store_unavailable"), _back_kb(lang, "menu:shop"))
         await callback.answer()
         return
     title = (supplier.display_name or supplier.name) if supplier else f"Supplier {supplier_id}"
@@ -486,8 +501,13 @@ async def _render_supplier_products(
         title += f" — {cat}"
     elif cat_idx is not None:
         title += f" — {_t(lang, 'other_category')}"
+    # Back goes to the category screen only when one exists; a store
+    # with one category (or none) has no category screen, so Back
+    # returns to the store sections - otherwise it re-renders this
+    # same list and Telegram refuses ("message is not modified").
+    back_cb = f"shop:sup:{supplier_id}" if len(cats) > 1 else "menu:shop"
     if not rows:
-        await callback.message.edit_text(f"🏬 {title}\n{_t(lang, 'empty')}", reply_markup=_back_kb(lang, f"shop:sup:{supplier_id}"))
+        await _safe_edit(callback, f"🏬 {title}\n{_t(lang, 'empty')}", _back_kb(lang, back_cb))
         await callback.answer()
         return
     page_rows, pages, page = _paginate(rows, page)
@@ -506,11 +526,11 @@ async def _render_supplier_products(
         for p in page_rows
     ]
     buttons += _nav_row(lang, page, pages, page_cb)
-    buttons.append([types.InlineKeyboardButton(text=_t(lang, "back"), callback_data=f"shop:sup:{supplier_id}")])
+    buttons.append([types.InlineKeyboardButton(text=_t(lang, "back"), callback_data=back_cb)])
     text = f"🏬 {title}:"
     if pages > 1:
         text += f"\n{_t(lang, 'page')} {page} {_t(lang, 'of')} {pages}"
-    await callback.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=buttons))
+    await _safe_edit(callback, text, types.InlineKeyboardMarkup(inline_keyboard=buttons))
     await callback.answer()
 
 

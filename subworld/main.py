@@ -30,7 +30,7 @@ async def cmd_start(message: types.Message) -> None:
     lang = USER_LANG.get(message.from_user.id)
     if lang in TEXTS:
         # Main menu is the panel-driven reply keyboard (buttons.py).
-        await send_main_menu(message, lang)
+        await send_main_menu(message, lang, message.from_user)
     else:
         await message.answer(CHOOSE_TEXT, reply_markup=choose_kb())
 
@@ -51,7 +51,7 @@ async def on_lang(callback: types.CallbackQuery) -> None:
         )
     except Exception:
         pass
-    await send_main_menu(callback.message, lang)
+    await send_main_menu(callback.message, lang, callback.from_user)
     await callback.answer()
 
 
