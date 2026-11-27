@@ -351,11 +351,11 @@ async def _render_local_list(callback: types.CallbackQuery, page: int) -> None:
             buyable = p.quantity is None or p.quantity > 0
             stock_text = "∞" if p.quantity is None else str(p.quantity)
         style = "success" if buyable else "danger"
-        items.append((f"{name} — {_fmt_price(p.price_usd)} 📦{stock_text}", f"shop:local:{p.id}", style))
+        items.append((f"{name} — {_fmt_price(p.price_usd)} (📦{stock_text})", f"shop:local:{p.id}", style))
     for p in moved:
         buyable = _supplier_buyable(p)
         items.append((
-            f"{p.name[:28]} — {_fmt_price(p.selling_price or 0)} 📦{_supplier_stock_text(p)}",
+            f"{p.name[:28]} — {_fmt_price(p.selling_price or 0)} (📦{_supplier_stock_text(p)})",
             f"shop:sprod:{p.id}",
             "success" if buyable else "danger",
         ))
@@ -538,7 +538,7 @@ async def _render_supplier_products(
     _remember_list(callback.from_user.id, list_cb)
     buttons = [
         [types.InlineKeyboardButton(
-            text=f"{p.name[:28]} — {_fmt_price(p.selling_price or 0)} 📦{_supplier_stock_text(p)}",
+            text=f"{p.name[:28]} — {_fmt_price(p.selling_price or 0)} (📦{_supplier_stock_text(p)})",
             callback_data=f"shop:sprod:{p.id}",
             style="success" if _supplier_buyable(p) else "danger",
         )]
