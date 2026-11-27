@@ -27,10 +27,19 @@ async def _run_support_bot():
         logger.exception("Support bot failed: %s", e)
 
 
+async def _run_subworld_bot():
+    """تشغيل بوت SubWorld (البوت الرئيسي)."""
+    try:
+        from subworld import main as subworld_main
+        await subworld_main()
+    except Exception as e:
+        logger.exception("SubWorld bot failed: %s", e)
+
 async def main():
-    """تشغيل البوتين معًا بشكل متوازي."""
-    logger.info("Starting shop bot and support bot together...")
+    """تشغيل البوتات معًا بشكل متوازي (SubWorld هو البوت الرئيسي)."""
+    logger.info("Starting bots together (SubWorld is the main bot)...")
     await asyncio.gather(
+        _run_subworld_bot(),
         _run_shop_bot(),
         _run_support_bot(),
     )
