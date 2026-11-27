@@ -18,6 +18,7 @@ from .buttons import (
     edit_main_menu,
     ensure_default_buttons,
     ensure_default_labels,
+    ensure_rules_seeded,
     send_main_menu,
 )
 from .catalog import catalog_router
@@ -117,6 +118,7 @@ async def main() -> None:
             await ensure_featured_subscriptions_seeded()
             await ensure_default_buttons()
             await ensure_default_labels()
+            await ensure_rules_seeded()
             db_ready = True
             logger.info("SubWorld DB ready.")
         except Exception:

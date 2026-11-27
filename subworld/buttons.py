@@ -188,6 +188,56 @@ async def ensure_default_labels() -> None:
         logger.info("SubWorld default button labels seeded (%d labels)", len(DEFAULT_LABELS))
 
 
+async def ensure_rules_seeded() -> int:
+    """Copy the Yemen bot's rules into SubWorld on first run only.
+
+    Runs only when the SubWorld rules table is empty, so rules the
+    user already added in SubWorld are never overwritten. The Yemen
+    rules have one text field (Arabic); it becomes text_ar and text_en
+    stays empty, so English users see the Arabic text - the same
+    fallback as a rule without an English translation (he can fill in
+    the English text per rule in the panel afterwards). Order and the
+    active state are preserved. Same mechanism as the featured
+    subscriptions seeding. Returns the number of rules seeded (0 if
+    already seeded or skipped)."""
+    try:
+        async with _session() as session:
+            existing = (await session.execute(select(BotRule.id).limit(1))).first()
+            if existing is not None:
+                return 0
+
+        from bot.database.main import Database as YemenDatabase
+        from bot.database.models.main import BotRule as YemenBotRule
+
+        async with YemenDatabase().session() as ysession:
+            rows = (await ysession.execute(
+                select(YemenBotRule).order_by(YemenBotRule.sort_order, YemenBotRule.id)
+            )).scalars().all()
+            rows_data = [
+                {"text": r.text, "sort_order": r.sort_order or 0, "is_active": r.is_active}
+                for r in rows
+            ]
+
+        if not rows_data:
+            logger.warning("SubWorld rules seeding skipped: no rules in Yemen DB")
+            return 0
+
+        async with _session() as session:
+            for data in rows_data:
+                session.add(BotRule(
+                    text_ar=data["text"],
+                    text_en=None,
+                    sort_order=data["sort_order"],
+                    is_active=data["is_active"],
+                ))
+            await session.commit()
+        logger.info("SubWorld rules seeded: %s rules from Yemen bot", len(rows_data))
+        return len(rows_data)
+    except Exception as e:
+        logger.warning("SubWorld rules seeding failed: %s", e)
+        return 0
+
+
 async def _welcome_stats(user_id: int):
     """(balance_usd, purchase_count) from the DB; (None, None) when the
     database is unavailable. Purchases count every order (delivered
