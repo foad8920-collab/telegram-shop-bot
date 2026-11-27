@@ -2293,4 +2293,14 @@ def create_admin_app(bot: Any = None) -> Starlette:
     admin.add_view(BotButtonView)
     admin.add_view(PaymentMethodView)
 
+    # SubWorld panel (separate database, same login): mounted at /subworld.
+    # Guarded so a SubWorld problem can never break the Yemen panel.
+    try:
+        from subworld.admin import create_subworld_admin_app
+
+        app.mount("/subworld", create_subworld_admin_app())
+        logging.info("SubWorld admin panel mounted at /subworld")
+    except Exception:
+        logging.exception("SubWorld admin panel mount failed - Yemen panel unaffected")
+
     return app
