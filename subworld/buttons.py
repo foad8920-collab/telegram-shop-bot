@@ -34,7 +34,7 @@ from .button_models import (
     load_labels,
 )
 from .db import get_session_factory
-from .keyboards import TEXTS
+from .keyboards import DIVIDER, TEXTS
 from .models import Order, SubworldUser
 
 logger = logging.getLogger("subworld.buttons")
@@ -329,6 +329,60 @@ async def ensure_rules_seeded() -> int:
         return 0
 
 
+# Arabic button phrases -> English, for panel buttons the user added
+# without an English text (the menu otherwise shows the Arabic text in
+# English mode). Longest phrases first, so "البحث عن المنتجات" wins
+# over "البحث". Only buttons with an empty English text are filled;
+# a translation typed in the panel always wins.
+BUTTON_TRANSLATIONS: tuple[tuple[str, str], ...] = (
+    ("البحث عن المنتجات", "Search products"),
+    ("الاشتراكات المميزة", "Featured subscriptions"),
+    ("القائمة الرئيسية", "Main menu"),
+    ("الملف الشخصي", "Profile"),
+    ("نظام الإحالة", "Referral system"),
+    ("قناة الأخبار", "News channel"),
+    ("لوحة التحكم", "Control panel"),
+    ("إدارة المنتجات", "Products management"),
+    ("إدارة المتجر", "Store management"),
+    ("المتجر العام", "Store"),
+    ("الدعم الفني", "Support"),
+    ("القوانين", "Rules"),
+    ("رصيدي", "Balance"),
+    ("اللغة", "Language"),
+    ("البحث", "Search"),
+    ("رجوع", "Back"),
+)
+
+
+async def ensure_button_translations() -> int:
+    """Fill in the English text of panel buttons that have none.
+
+    Runs at startup; only touches rows whose button_text_en is empty,
+    so a translation the user typed in the panel is never overwritten.
+    Returns how many buttons were filled (0 when nothing was missing)."""
+    try:
+        filled = 0
+        async with _session() as session:
+            rows = (await session.execute(select(BotButton))).scalars().all()
+            for row in rows:
+                if (row.button_text_en or "").strip():
+                    continue
+                text_en = row.button_text or ""
+                for ar, en in sorted(BUTTON_TRANSLATIONS, key=lambda p: -len(p[0])):
+                    text_en = text_en.replace(ar, en)
+                if text_en.strip() and text_en != row.button_text:
+                    row.button_text_en = text_en.strip()
+                    filled += 1
+            if filled:
+                await session.commit()
+        if filled:
+            logger.info("SubWorld button translations filled: %s buttons", filled)
+        return filled
+    except Exception as e:
+        logger.warning("SubWorld button translations failed: %s", e)
+        return 0
+
+
 async def _welcome_stats(user_id: int):
     """(balance_usd, purchase_count) from the DB; (None, None) when the
     database is unavailable. Purchases count every order (delivered
@@ -356,7 +410,7 @@ def _welcome_text(lang: str, name: str, balance: Decimal, count: int) -> str:
         greeting = f"🎉 Welcome, {name}!" if name else "🎉 Welcome!"
         purchases = "1 purchase" if count == 1 else f"{count} purchases"
         return (
-            f"{greeting}\n\n"
+            f"{greeting}\n{DIVIDER}\n"
             f"💎 Balance: ${balance:.2f}\n"
             f"🛍️ Purchases: {purchases}\n\n"
             "Choose from the menu below:"
@@ -369,7 +423,7 @@ def _welcome_text(lang: str, name: str, balance: Decimal, count: int) -> str:
     else:
         purchases = str(count)
     return (
-        f"{greeting}\n\n"
+        f"{greeting}\n{DIVIDER}\n"
         f"💎 رصيدك: ${balance:.2f}\n"
         f"🛍️ مشترياتك: {purchases}\n\n"
         "اختر من القائمة أدناه:"

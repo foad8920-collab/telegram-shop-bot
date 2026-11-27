@@ -1,6 +1,12 @@
 """SubWorld texts and keyboards (Arabic/English)."""
 from aiogram import types
 
+# The divider line under a greeting or a section title (like the Yemen
+# bot's welcome): it is the longest line in the message, so it stretches
+# the message bubble to (near) full width - and the inline buttons
+# attached to it stretch with it.
+DIVIDER = "─" * 30
+
 USER_LANG: dict[int, str] = {}
 
 CHOOSE_TEXT = (
@@ -13,13 +19,15 @@ TEXTS = {
     "ar": {
         "welcome": (
             "أهلا بك في SubWorld - عالم الاشتراكات الرقمية\n"
-            "تصفح المتجر واختر اشتراكك، والدفع بالدولار عبر Binance أو الكريبتو أو المحفظة."
+            + DIVIDER
+            + "\nتصفح المتجر واختر اشتراكك، والدفع بالدولار عبر Binance أو الكريبتو أو المحفظة."
         ),
     },
     "en": {
         "welcome": (
             "Welcome to SubWorld - Digital Subscriptions World\n"
-            "Browse the store and pick your subscription. Pay in USD via Binance, crypto or wallet."
+            + DIVIDER
+            + "\nBrowse the store and pick your subscription. Pay in USD via Binance, crypto or wallet."
         ),
     },
 }

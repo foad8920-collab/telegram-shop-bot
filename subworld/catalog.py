@@ -9,9 +9,11 @@ until then a purchase with insufficient balance explains how to top up.
 Store lists are paginated (10 products per page) with next/previous
 buttons. Supplier stores first show their categories; a product moved
 to Featured in the admin panel (show_in_local) appears in the Featured
-list instead of its supplier store. Stock is marked 🟢 in stock /
-🔴 out of stock on every product button (inline buttons use the dot;
-the main menu's reply-keyboard buttons use Bot API 9.4 styles).
+list instead of its supplier store. Availability is shown by the
+button colour (green when buyable, red when out of stock, Bot API 9.4
+styles) and the quantity is shown on every product button - no dots.
+Headers carry a divider line (like the Yemen bot's welcome) so the
+message bubble - and the buttons attached to it - stretch to full width.
 """
 from __future__ import annotations
 
@@ -25,7 +27,7 @@ from sqlalchemy import func, select
 
 from .button_models import DEFAULT_LABELS, BotButton, label_text, load_labels
 from .db import get_session_factory
-from .keyboards import CHOOSE_TEXT, TEXTS, choose_kb, get_lang, main_menu_kb
+from .keyboards import CHOOSE_TEXT, DIVIDER, TEXTS, choose_kb, get_lang, main_menu_kb
 from .models import Order, Product, ProductCode, SubworldUser
 from .supplier_models import Supplier, SupplierProduct
 
@@ -55,11 +57,11 @@ def _t(lang: str, key: str) -> str:
             "en": "The store is unavailable right now (database is not configured).",
         },
         "store_title": {
-            "ar": "🛍️ المتجر\nاختر القسم:",
-            "en": "🛍️ Store\nChoose a section:",
+            "ar": "🛍️ المتجر\n" + DIVIDER + "\nاختر القسم:",
+            "en": "🛍️ Store\n" + DIVIDER + "\nChoose a section:",
         },
         "local_section": {"ar": "⭐ الاشتراكات المميزة", "en": "⭐ Featured subscriptions"},
-        "local_title": {"ar": "⭐ الاشتراكات المميزة:", "en": "⭐ Featured subscriptions:"},
+        "local_title": {"ar": "⭐ الاشتراكات المميزة:\n" + DIVIDER, "en": "⭐ Featured subscriptions:\n" + DIVIDER},
         "empty": {"ar": "لا منتجات حاليا.", "en": "No products right now."},
         "back": {"ar": "🔙 رجوع", "en": "🔙 Back"},
         "main_menu": {"ar": "🔙 القائمة الرئيسية", "en": "🔙 Main menu"},
@@ -132,10 +134,6 @@ def _supplier_buyable(product: SupplierProduct) -> bool:
     if product.is_unlimited:
         return True
     return (product.stock or 0) > 0
-
-
-def _supplier_dot(product: SupplierProduct) -> str:
-    return "🟢" if _supplier_buyable(product) else "🔴"
 
 
 def _remember_list(user_id: int, callback_data: str) -> None:
@@ -228,7 +226,7 @@ async def on_rules(callback: types.CallbackQuery) -> None:
 
 def _balance_text(balance: Decimal, lang: str) -> str:
     return (
-        f"{_t(lang, 'balance_title')}\n"
+        f"{_t(lang, 'balance_title')}\n{DIVIDER}\n"
         f"{_t(lang, 'balance_line')}: {_fmt_price(balance)}\n\n"
         f"{_t(lang, 'topup_hint')}"
     )
@@ -342,7 +340,7 @@ async def _render_local_list(callback: types.CallbackQuery, page: int) -> None:
         await callback.message.edit_text(_t(lang, "store_unavailable"), reply_markup=_back_kb(lang, "menu:shop", labels))
         await callback.answer()
         return
-    items = []  # (dot, label, callback_data, style)
+    items = []  # (label, callback_data, style)
     for p in products:
         name = (p.name_en if lang == "en" else p.name_ar)[:28]
         if (p.delivery_type or "codes") == "codes":
@@ -352,13 +350,11 @@ async def _render_local_list(callback: types.CallbackQuery, page: int) -> None:
         else:
             buyable = p.quantity is None or p.quantity > 0
             stock_text = "∞" if p.quantity is None else str(p.quantity)
-        dot = "🟢" if buyable else "🔴"
         style = "success" if buyable else "danger"
-        items.append((dot, f"{name} — {_fmt_price(p.price_usd)} 📦{stock_text}", f"shop:local:{p.id}", style))
+        items.append((f"{name} — {_fmt_price(p.price_usd)} 📦{stock_text}", f"shop:local:{p.id}", style))
     for p in moved:
         buyable = _supplier_buyable(p)
         items.append((
-            _supplier_dot(p),
             f"{p.name[:28]} — {_fmt_price(p.selling_price or 0)} 📦{_supplier_stock_text(p)}",
             f"shop:sprod:{p.id}",
             "success" if buyable else "danger",
@@ -371,8 +367,8 @@ async def _render_local_list(callback: types.CallbackQuery, page: int) -> None:
     list_cb = f"shop:feat:{page}" if page > 1 else "shop:local_list"
     _remember_list(callback.from_user.id, list_cb)
     buttons = [
-        [types.InlineKeyboardButton(text=f"{dot} {label}", callback_data=cb, style=style)]
-        for dot, label, cb, style in page_items
+        [types.InlineKeyboardButton(text=label, callback_data=cb, style=style)]
+        for label, cb, style in page_items
     ]
     buttons += _nav_row(lang, page, pages, lambda p: f"shop:feat:{p}", labels)
     back_text, back_style = label_text(labels, "back", lang)
@@ -472,7 +468,7 @@ async def on_supplier_categories(callback: types.CallbackQuery) -> None:
     buttons.append([types.InlineKeyboardButton(text=back_text, callback_data="menu:shop", style=back_style)])
     await _safe_edit(
         callback,
-        f"🏬 {title}\n{_t(lang, 'categories')}",
+        f"🏬 {title}\n{DIVIDER}\n{_t(lang, 'categories')}",
         types.InlineKeyboardMarkup(inline_keyboard=buttons),
     )
     await callback.answer()
@@ -542,7 +538,7 @@ async def _render_supplier_products(
     _remember_list(callback.from_user.id, list_cb)
     buttons = [
         [types.InlineKeyboardButton(
-            text=f"{_supplier_dot(p)} {p.name[:28]} — {_fmt_price(p.selling_price or 0)} 📦{_supplier_stock_text(p)}",
+            text=f"{p.name[:28]} — {_fmt_price(p.selling_price or 0)} 📦{_supplier_stock_text(p)}",
             callback_data=f"shop:sprod:{p.id}",
             style="success" if _supplier_buyable(p) else "danger",
         )]
@@ -551,7 +547,7 @@ async def _render_supplier_products(
     buttons += _nav_row(lang, page, pages, page_cb, labels)
     back_text, back_style = label_text(labels, "back", lang)
     buttons.append([types.InlineKeyboardButton(text=back_text, callback_data=back_cb, style=back_style)])
-    text = f"🏬 {title}:"
+    text = f"🏬 {title}:\n{DIVIDER}"
     if pages > 1:
         text += f"\n{_t(lang, 'page')} {page} {_t(lang, 'of')} {pages}"
     await _safe_edit(callback, text, types.InlineKeyboardMarkup(inline_keyboard=buttons))
@@ -672,13 +668,12 @@ async def on_supplier_detail(callback: types.CallbackQuery) -> None:
         await callback.answer()
         return
     buyable = _supplier_buyable(product)
-    dot = _supplier_dot(product)
     lines = [f"<b>{product.name}</b>"]
     if product.description:
         lines.append(product.description[:800])
     lines.append(f"{_t(lang, 'price')}: {_fmt_price(product.selling_price or 0)}")
     stock = _t(lang, "unlimited") if product.is_unlimited else str(product.stock or 0)
-    stock_line = f"{dot} {_t(lang, 'stock')}: {stock}"
+    stock_line = f"{_t(lang, 'stock')}: {stock}"
     if not buyable:
         stock_line += f" — {_t(lang, 'out_of_stock')}"
     lines.append(stock_line)

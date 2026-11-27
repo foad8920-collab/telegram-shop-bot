@@ -16,6 +16,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from .buttons import (
     edit_main_menu,
+    ensure_button_translations,
     ensure_default_buttons,
     ensure_default_labels,
     ensure_rules_seeded,
@@ -70,6 +71,26 @@ async def _sync_loop(bot: Bot) -> None:
         await asyncio.sleep(1800)
 
 
+async def _setup_commands(bot: Bot) -> None:
+    """Put /start in the bot's command menu (the Menu button by the
+    message box) in Arabic, English and as the default. Never breaks
+    startup if Telegram refuses."""
+    try:
+        await bot.set_my_commands(
+            [types.BotCommand(command="start", description="ابدأ البوت")],
+            language_code="ar",
+        )
+        await bot.set_my_commands(
+            [types.BotCommand(command="start", description="Start the bot")],
+            language_code="en",
+        )
+        await bot.set_my_commands(
+            [types.BotCommand(command="start", description="Start the bot")],
+        )
+    except Exception:
+        logger.warning("SubWorld set_my_commands failed", exc_info=True)
+
+
 async def _poll_once(token: str, db_ready: bool) -> None:
     async with Bot(
         token=token,
@@ -84,6 +105,7 @@ async def _poll_once(token: str, db_ready: bool) -> None:
         dp.include_router(catalog_router)
         info = await bot.get_me()
         logger.info("SubWorld bot started: @%s", info.username)
+        await _setup_commands(bot)
         sync_task = None
         if db_ready:
             sync_task = asyncio.create_task(_sync_loop(bot))
@@ -117,6 +139,7 @@ async def main() -> None:
             await ensure_suppliers_seeded()
             await ensure_featured_subscriptions_seeded()
             await ensure_default_buttons()
+            await ensure_button_translations()
             await ensure_default_labels()
             await ensure_rules_seeded()
             db_ready = True
