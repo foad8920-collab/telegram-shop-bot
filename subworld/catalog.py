@@ -180,24 +180,27 @@ def _nav_row(lang: str, page: int, pages: int, page_cb) -> list:
 
 @catalog_router.callback_query(F.data == "menu:main")
 async def on_menu_main(callback: types.CallbackQuery) -> None:
-    # The main menu is a reply keyboard (buttons.py), which cannot be
-    # attached to an edited message: send it as a new message and clear
-    # the old message's inline keyboard.
+    # The main menu is an inline keyboard under the welcome message:
+    # turn this message back into the welcome + menu.
     lang = get_lang(callback.from_user.id)
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except Exception:
-        pass
-    from .buttons import send_main_menu
+    from .buttons import edit_main_menu
 
-    await send_main_menu(callback.message, lang, callback.from_user)
+    await edit_main_menu(callback, lang)
     await callback.answer()
 
 
-@catalog_router.callback_query(F.data == "menu:lang")
+@catalog_router.callback_query(F.data.in_({"menu:lang", "choose_language"}))
 async def on_menu_lang(callback: types.CallbackQuery) -> None:
     await callback.message.edit_text(CHOOSE_TEXT, reply_markup=choose_kb())
     await callback.answer()
+
+
+@catalog_router.callback_query(F.data == "rules")
+async def on_rules(callback: types.CallbackQuery) -> None:
+    lang = get_lang(callback.from_user.id)
+    from .buttons import _send_rules
+
+    await _send_rules(callback, lang)
 
 
 def _balance_text(balance: Decimal, lang: str) -> str:
@@ -218,19 +221,7 @@ async def _load_balance(user_id: int, lang: str) -> Decimal | None:
         return None
 
 
-async def send_balance(message: types.Message, lang: str) -> None:
-    """Balance as a new message (used by the reply-keyboard button)."""
-    if not _db_on():
-        await message.answer(_t(lang, "store_unavailable"))
-        return
-    balance = await _load_balance(message.from_user.id, lang)
-    if balance is None:
-        await message.answer(_t(lang, "store_unavailable"))
-        return
-    await message.answer(_balance_text(balance, lang))
-
-
-@catalog_router.callback_query(F.data == "menu:balance")
+@catalog_router.callback_query(F.data.in_({"menu:balance", "profile"}))
 async def on_menu_balance(callback: types.CallbackQuery) -> None:
     lang = get_lang(callback.from_user.id)
     if not _db_on():
@@ -272,22 +263,7 @@ def _store_sections_kb(lang: str, suppliers) -> types.InlineKeyboardMarkup:
     return types.InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-async def send_store_sections(message: types.Message, lang: str) -> None:
-    """Store sections as a new message (used by the reply-keyboard button)."""
-    if not _db_on():
-        await message.answer(_t(lang, "store_unavailable"))
-        return
-    try:
-        async with _session() as session:
-            suppliers = await _load_store_suppliers(session)
-    except Exception:
-        logger.exception("SubWorld store sections failed")
-        await message.answer(_t(lang, "store_unavailable"))
-        return
-    await message.answer(_t(lang, "store_title"), reply_markup=_store_sections_kb(lang, suppliers))
-
-
-@catalog_router.callback_query(F.data == "menu:shop")
+@catalog_router.callback_query(F.data.in_({"menu:shop", "shop"}))
 async def on_menu_shop(callback: types.CallbackQuery) -> None:
     lang = get_lang(callback.from_user.id)
     if not _db_on():

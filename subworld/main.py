@@ -14,7 +14,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import CommandStart
 from aiogram.fsm.storage.memory import MemoryStorage
 
-from .buttons import ensure_default_buttons, on_menu_button_text, send_main_menu
+from .buttons import edit_main_menu, ensure_default_buttons, send_main_menu
 from .catalog import catalog_router
 from .keyboards import (
     CHOOSE_TEXT,
@@ -29,7 +29,7 @@ logger = logging.getLogger("subworld")
 async def cmd_start(message: types.Message) -> None:
     lang = USER_LANG.get(message.from_user.id)
     if lang in TEXTS:
-        # Main menu is the panel-driven reply keyboard (buttons.py).
+        # Main menu is the panel-driven inline menu (buttons.py).
         await send_main_menu(message, lang, message.from_user)
     else:
         await message.answer(CHOOSE_TEXT, reply_markup=choose_kb())
@@ -45,14 +45,10 @@ async def on_lang(callback: types.CallbackQuery) -> None:
     if lang not in TEXTS:
         lang = "ar"
     USER_LANG[callback.from_user.id] = lang
-    try:
-        await callback.message.edit_text(
-            "✅ تم اختيار اللغة." if lang == "ar" else "✅ Language selected."
-        )
-    except Exception:
-        pass
-    await send_main_menu(callback.message, lang, callback.from_user)
-    await callback.answer()
+    # Turn the chooser message into the welcome + inline menu, and show
+    # the confirmation as a toast instead of a separate message.
+    await edit_main_menu(callback, lang)
+    await callback.answer("✅ تم اختيار اللغة." if lang == "ar" else "✅ Language selected.")
 
 
 async def _sync_loop(bot: Bot) -> None:
@@ -76,8 +72,8 @@ async def _poll_once(token: str, db_ready: bool) -> None:
         await bot.delete_webhook(drop_pending_updates=False)
         dp = Dispatcher(storage=MemoryStorage())
         dp.message.register(cmd_start, CommandStart())
-        # Reply-keyboard presses arrive as the button's text.
-        dp.message.register(on_menu_button_text, F.text)
+        # The main menu is inline: presses arrive as callback_data and
+        # are handled by the catalog router (menu:shop / shop, ...).
         dp.callback_query.register(on_lang, F.data.startswith("lang:"))
         dp.include_router(catalog_router)
         info = await bot.get_me()

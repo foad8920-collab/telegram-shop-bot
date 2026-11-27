@@ -1,4 +1,9 @@
-"""Panel-driven main menu (Telegram reply keyboard) + button presses.
+"""Panel-driven main menu (inline buttons under the welcome message).
+
+The menu is an INLINE keyboard attached to the welcome message, so it
+sits in the messages area above the input box - exactly like the Yemen
+bot's menu. (A reply keyboard is rendered by the client below the
+input box, which is why the menu is inline, not a reply keyboard.)
 
 Nothing about the main menu lives in code: the menu is built from
 BotButton rows in the database, so the user adds, edits, deletes,
@@ -6,11 +11,9 @@ reorders, renames and recolours every button from the admin panel.
 The only code-side piece is the one-time seed below, which runs when
 the table is empty - after that the panel owns the menu completely.
 
-A reply-keyboard press arrives as the button's text, so this module
-matches the text against the active buttons (Arabic or English) and
-dispatches on callback_data. A button with a url and no known action
-(for example the support button linking to the support bot) is
-answered with that link.
+A press arrives as the button's callback_data (shop / profile /
+choose_language / rules / ...), handled by the catalog router; a
+button with a url opens that link directly, no handler needed.
 """
 from __future__ import annotations
 
@@ -22,7 +25,7 @@ from sqlalchemy import func, select
 
 from .button_models import BUTTON_STYLES, MAIN_MENU_NAME, BotButton, BotRule
 from .db import get_session_factory
-from .keyboards import TEXTS, get_lang
+from .keyboards import TEXTS
 from .models import Order, SubworldUser
 
 logger = logging.getLogger("subworld.buttons")
@@ -46,11 +49,13 @@ async def load_menu_buttons(session, menu_name: str = MAIN_MENU_NAME):
     return rows
 
 
-def build_reply_kb(buttons, lang: str) -> types.ReplyKeyboardMarkup:
-    """Rows from BotButton rows: a full_width button takes its own row,
-    otherwise two buttons share a row, in sort_order."""
-    rows: list[list[types.KeyboardButton]] = []
-    pending: list[types.KeyboardButton] = []
+def build_inline_kb(buttons, lang: str) -> types.InlineKeyboardMarkup:
+    """Inline rows from BotButton rows: a full_width button takes its
+    own row, otherwise two buttons share a row, in sort_order. A
+    button with a url opens the link; otherwise it sends its
+    callback_data. Rows with neither are skipped."""
+    rows: list[list[types.InlineKeyboardButton]] = []
+    pending: list[types.InlineKeyboardButton] = []
 
     def flush():
         nonlocal pending
@@ -65,7 +70,17 @@ def build_reply_kb(buttons, lang: str) -> types.ReplyKeyboardMarkup:
             kwargs["style"] = style
         if (b.icon_custom_emoji_id or "").strip():
             kwargs["icon_custom_emoji_id"] = b.icon_custom_emoji_id.strip()
-        btn = types.KeyboardButton(text=b.text_for(lang), **kwargs)
+        url = (b.url or "").strip()
+        action = (b.callback_data or "").strip()
+        if url:
+            btn = types.InlineKeyboardButton(text=b.text_for(lang), url=url, **kwargs)
+        elif action:
+            btn = types.InlineKeyboardButton(
+                text=b.text_for(lang), callback_data=action, **kwargs
+            )
+        else:
+            logger.warning("SubWorld menu button %r has no url or callback_data, skipped", b.button_text)
+            continue
         if b.full_width:
             flush()
             rows.append([btn])
@@ -74,9 +89,7 @@ def build_reply_kb(buttons, lang: str) -> types.ReplyKeyboardMarkup:
             if len(pending) == 2:
                 flush()
     flush()
-    return types.ReplyKeyboardMarkup(
-        keyboard=rows, resize_keyboard=True, is_persistent=True
-    )
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def ensure_default_buttons() -> None:
@@ -177,14 +190,14 @@ def _welcome_text(lang: str, name: str, balance: Decimal, count: int) -> str:
     )
 
 
-async def send_main_menu(message: types.Message, lang: str, user=None) -> None:
-    """Welcome (Yemen-style) + the panel-driven reply keyboard. Falls
-    back to the static welcome + inline menu when the database is
-    unavailable. `user` is the Telegram user (needed because
-    callback.message.from_user is the bot, not the user)."""
+async def _main_menu_content(lang: str, user):
+    """(welcome text, inline keyboard) for the main menu. Falls back
+    to the static welcome + built-in inline menu when the database is
+    unavailable or the panel has no buttons. `user` is the Telegram
+    user (needed because callback.message.from_user is the bot)."""
     from .keyboards import main_menu_kb
 
-    tg_user = user or message.from_user
+    tg_user = user
     name = ""
     if tg_user is not None:
         name = (tg_user.first_name or tg_user.username or "").strip()
@@ -197,14 +210,48 @@ async def send_main_menu(message: types.Message, lang: str, user=None) -> None:
                 text = TEXTS[lang]["welcome"]
             else:
                 text = _welcome_text(lang, name, balance, count)
-            await message.answer(text, reply_markup=build_reply_kb(buttons, lang))
-            return
+            return text, build_inline_kb(buttons, lang)
     except Exception:
         logger.exception("SubWorld main menu from panel failed, using inline fallback")
-    await message.answer(TEXTS[lang]["welcome"], reply_markup=main_menu_kb(lang))
+    return TEXTS[lang]["welcome"], main_menu_kb(lang)
 
 
-async def _send_rules(message: types.Message, lang: str) -> None:
+async def send_main_menu(message: types.Message, lang: str, user=None) -> None:
+    """Welcome (Yemen-style) + the panel-driven inline menu, as a new
+    message (used by /start).
+
+    The welcome is sent first carrying ReplyKeyboardRemove, which
+    clears the old reply keyboard left by the pre-v2 menu (a reply
+    keyboard stays docked below the input box until the bot removes
+    it); the inline menu is then attached to the same message, so the
+    chat gets exactly one message and no leftover keyboard."""
+    tg_user = user or message.from_user
+    text, kb = await _main_menu_content(lang, tg_user)
+    sent = await message.answer(text, reply_markup=types.ReplyKeyboardRemove())
+    try:
+        await sent.edit_reply_markup(reply_markup=kb)
+    except Exception:
+        logger.exception("SubWorld attach inline menu failed, sending menu again")
+        await message.answer(text, reply_markup=kb)
+
+
+async def edit_main_menu(callback: types.CallbackQuery, lang: str) -> None:
+    """Turn the current message back into the welcome + inline menu
+    (used by 'back to main menu' and after choosing a language)."""
+    from aiogram.exceptions import TelegramBadRequest
+
+    text, kb = await _main_menu_content(lang, callback.from_user)
+    try:
+        await callback.message.edit_text(text, reply_markup=kb)
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
+        logger.debug("SubWorld main-menu edit skipped: message not modified")
+
+
+async def _send_rules(callback: types.CallbackQuery, lang: str) -> None:
+    """Rules as an edit of the current message, with a back button to
+    the main menu."""
     try:
         async with _session() as session:
             rows = (
@@ -216,72 +263,29 @@ async def _send_rules(message: types.Message, lang: str) -> None:
             ).scalars().all()
     except Exception:
         logger.exception("SubWorld rules read failed")
-        await message.answer(
-            "القوانين غير متاحة حاليا." if lang == "ar" else "Rules are unavailable right now."
+        await callback.message.edit_text(
+            "القوانين غير متاحة حاليا." if lang == "ar" else "Rules are unavailable right now.",
+            reply_markup=_rules_back_kb(lang),
         )
+        await callback.answer()
         return
     if not rows:
-        await message.answer(
+        text = (
             "لا توجد قوانين بعد — أضفها من لوحة التحكم."
             if lang == "ar"
             else "No rules yet — add them from the admin panel."
         )
-        return
-    lines = [f"{i}. {r.text_for(lang)}" for i, r in enumerate(rows, 1)]
-    await message.answer("\n".join(lines))
-
-
-async def on_menu_button_text(message: types.Message) -> None:
-    """A reply-keyboard press arrives as the button's text: find the
-    panel button with that text (Arabic or English) and run its action."""
-    text = (message.text or "").strip()
-    if not text:
-        return
-    lang = get_lang(message.from_user.id)
-    try:
-        async with _session() as session:
-            rows = (
-                await session.execute(
-                    select(BotButton)
-                    .where(BotButton.is_active == True)  # noqa: E712
-                    .order_by(BotButton.sort_order, BotButton.id)
-                )
-            ).scalars().all()
-    except Exception:
-        logger.exception("SubWorld menu button lookup failed")
-        return
-    button = next(
-        (b for b in rows if text in (b.button_text, b.button_text_en or "")),
-        None,
-    )
-    if button is None:
-        return
-    action = (button.callback_data or "").strip()
-    if action == "shop":
-        from .catalog import send_store_sections
-
-        await send_store_sections(message, lang)
-    elif action == "profile":
-        from .catalog import send_balance
-
-        await send_balance(message, lang)
-    elif action == "choose_language":
-        from .keyboards import CHOOSE_TEXT, choose_kb
-
-        await message.answer(CHOOSE_TEXT, reply_markup=choose_kb())
-    elif action == "rules":
-        await _send_rules(message, lang)
-    elif button.url:
-        # Link button (support bot, news channel, ...): send the link.
-        kb = types.InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    types.InlineKeyboardButton(
-                        text=button.text_for(lang), url=button.url
-                    )
-                ]
-            ]
-        )
-        await message.answer(button.text_for(lang), reply_markup=kb)
     else:
-        logger.info("SubWorld menu button %r has no action and no url", action)
+        text = "\n".join(f"{i}. {r.text_for(lang)}" for i, r in enumerate(rows, 1))
+    await callback.message.edit_text(text, reply_markup=_rules_back_kb(lang))
+    await callback.answer()
+
+
+def _rules_back_kb(lang: str) -> types.InlineKeyboardMarkup:
+    label = "🔙 القائمة الرئيسية" if lang == "ar" else "🔙 Main menu"
+    return types.InlineKeyboardMarkup(
+        inline_keyboard=[
+            [types.InlineKeyboardButton(text=label, callback_data="menu:main")]
+        ]
+    )
+
