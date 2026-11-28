@@ -116,26 +116,36 @@ async def format_supplier_update(ev: dict) -> str:
     price_new = ev.get("price_new")
     stock_new = ev.get("stock_new")
     if kind == "new":
-        header = "\U0001F195 <b>منتج جديد | New Product</b>"
+        header_ar = "\U0001F195 <b>منتج جديد</b>"
+        header_en = "\U0001F195 <b>New Product</b>"
     elif kind == "out":
-        header = "\U0000274C <b>نفد من المخزون | Out of Stock</b>"
+        header_ar = "\U0000274C <b>نفد من المخزون</b>"
+        header_en = "\U0000274C <b>Out of Stock</b>"
     elif kind == "back":
-        header = "\U00002705 <b>عاد للمخزون | Back in Stock</b>"
+        header_ar = "\U00002705 <b>عاد للمخزون</b>"
+        header_en = "\U00002705 <b>Back in Stock</b>"
     elif kind == "low_stock":
-        header = "\U000026A0\U0000FE0F <b>على وشك النفاذ | Almost Out of Stock</b>"
+        header_ar = "\U000026A0\U0000FE0F <b>على وشك النفاذ</b>"
+        header_en = "\U000026A0\U0000FE0F <b>Almost Out of Stock</b>"
     elif kind == "qty_up":
-        header = "\U00002795 <b>تمت إضافة كمية | Quantity Added</b>"
+        header_ar = "\U00002795 <b>تمت إضافة كمية</b>"
+        header_en = "\U00002795 <b>Quantity Added</b>"
     elif kind == "qty_down":
-        header = "\U00002796 <b>نقصت الكمية | Quantity Decreased</b>"
+        header_ar = "\U00002796 <b>نقصت الكمية</b>"
+        header_en = "\U00002796 <b>Quantity Decreased</b>"
     else:
         price_old = ev.get("price_old")
         if price_old is not None and price_new is not None and price_new > price_old:
-            header = "\U0001F4C8 <b>ارتفع السعر | Price Increased</b>"
+            header_ar = "\U0001F4C8 <b>ارتفع السعر</b>"
+            header_en = "\U0001F4C8 <b>Price Increased</b>"
         elif price_old is not None and price_new is not None and price_new < price_old:
-            header = "\U0001F4C9 <b>انخفض السعر | Price Decreased</b>"
+            header_ar = "\U0001F4C9 <b>انخفض السعر</b>"
+            header_en = "\U0001F4C9 <b>Price Decreased</b>"
         else:
-            header = "\U0001F504 <b>تعديل في المنتج | Product Updated</b>"
-    lines = [header, f"\U0001F3F7\U0000FE0F <b>{name}</b>"]
+            header_ar = "\U0001F504 <b>تعديل في المنتج</b>"
+            header_en = "\U0001F504 <b>Product Updated</b>"
+    lines_ar = [header_ar, f"\U0001F3F7\U0000FE0F <b>{name}</b>"]
+    lines_en = [header_en, f"\U0001F3F7\U0000FE0F <b>{name}</b>"]
     _display = ""
     try:
         _sid = ev.get("supplier_id")
@@ -150,25 +160,26 @@ async def format_supplier_update(ev: dict) -> str:
         _display = ""
     if _display:
         _en_display = _translate_source(_display)
-        if _en_display and _en_display != _display:
-            lines.append(f"\U0001F3EA المصدر | Source: <b>{_html.escape(_display, quote=False)} | {_html.escape(_en_display, quote=False)}</b>")
-        else:
-            lines.append(f"\U0001F3EA المصدر | Source: <b>{_html.escape(_display, quote=False)}</b>")
+        lines_ar.append(f"\U0001F3EA المصدر: <b>{_html.escape(_display, quote=False)}</b>")
+        lines_en.append(f"\U0001F3EA Source: <b>{_html.escape(_en_display, quote=False)}</b>")
     if price_new is not None:
         try:
             _price_block = await _fpa(price_new or 0)
             for _pl in _price_block.split(chr(10)):
                 if _pl.strip():
-                    lines.append(f"\U0001F4B0 {_pl.strip().replace('السعر:', 'السعر | Price:').replace('ريال سعودي', 'ريال سعودي | Saudi riyals').replace('ريال يمني', 'ريال يمني | Yemeni riyals')}")
+                    lines_ar.append(f"\U0001F4B0 {_pl.strip()}")
+                    _en = _pl.strip().replace("السعر:", "Price:").replace("ريال سعودي", "Saudi riyals").replace("ريال يمني", "Yemeni riyals")
+                    lines_en.append(f"\U0001F4B0 {_en}")
         except Exception:
-            lines.append(f"\U0001F4B0 السعر | Price: <b>{price_new}</b>")
+            lines_ar.append(f"\U0001F4B0 السعر: <b>{price_new}</b>")
+            lines_en.append(f"\U0001F4B0 Price: <b>{price_new}</b>")
     if stock_new is not None:
-        lines.append(f"\U0001F4E6 الكمية المتبقية | Remaining quantity: <b>{stock_new}</b>")
+        lines_ar.append(f"\U0001F4E6 الكمية المتبقية: <b>{stock_new}</b>")
+        lines_en.append(f"\U0001F4E6 Remaining quantity: <b>{stock_new}</b>")
     if stock_new is not None and 0 < stock_new <= 5 and kind != "out":
-        lines.append(f"\U000026A0\U0000FE0F على وشك النفاذ! تبقى <b>{stock_new}</b> فقط | Almost out! Only <b>{stock_new}</b> left")
-    return chr(10).join(lines)
-
-
+        lines_ar.append(f"\U000026A0\U0000FE0F على وشك النفاذ! تبقى <b>{stock_new}</b> فقط")
+        lines_en.append(f"\U000026A0\U0000FE0F Almost out! Only <b>{stock_new}</b> left")
+    return chr(10).join(lines_ar) + chr(10) + "==============" + chr(10) + chr(10).join(lines_en)
 def local_updates_keyboard(local_id=None):
     from aiogram.utils.keyboard import InlineKeyboardBuilder
     from aiogram.types import InlineKeyboardButton
@@ -189,27 +200,38 @@ async def format_local_update(ev: dict) -> str:
     price_new = ev.get("price_new")
     stock_new = ev.get("stock_new")
     if kind == "new":
-        header = "\U0001F195 <b>منتج جديد | New Product</b>"
+        header_ar = "\U0001F195 <b>منتج جديد</b>"
+        header_en = "\U0001F195 <b>New Product</b>"
     elif kind == "out":
-        header = "\U0000274C <b>نفد من المخزون | Out of Stock</b>"
+        header_ar = "\U0000274C <b>نفد من المخزون</b>"
+        header_en = "\U0000274C <b>Out of Stock</b>"
     elif kind == "back":
-        header = "\U00002705 <b>عاد للمخزون | Back in Stock</b>"
+        header_ar = "\U00002705 <b>عاد للمخزون</b>"
+        header_en = "\U00002705 <b>Back in Stock</b>"
     elif kind == "low_stock":
-        header = "\U000026A0\U0000FE0F <b>على وشك النفاذ | Almost Out of Stock</b>"
+        header_ar = "\U000026A0\U0000FE0F <b>على وشك النفاذ</b>"
+        header_en = "\U000026A0\U0000FE0F <b>Almost Out of Stock</b>"
     elif kind == "qty_up":
-        header = "\U00002795 <b>تمت إضافة كمية | Quantity Added</b>"
+        header_ar = "\U00002795 <b>تمت إضافة كمية</b>"
+        header_en = "\U00002795 <b>Quantity Added</b>"
     elif kind == "qty_down":
-        header = "\U00002796 <b>نقصت الكمية | Quantity Decreased</b>"
+        header_ar = "\U00002796 <b>نقصت الكمية</b>"
+        header_en = "\U00002796 <b>Quantity Decreased</b>"
     else:
         price_old = ev.get("price_old")
         if price_old is not None and price_new is not None and price_new > price_old:
-            header = "\U0001F4C8 <b>ارتفع السعر | Price Increased</b>"
+            header_ar = "\U0001F4C8 <b>ارتفع السعر</b>"
+            header_en = "\U0001F4C8 <b>Price Increased</b>"
         elif price_old is not None and price_new is not None and price_new < price_old:
-            header = "\U0001F4C9 <b>انخفض السعر | Price Decreased</b>"
+            header_ar = "\U0001F4C9 <b>انخفض السعر</b>"
+            header_en = "\U0001F4C9 <b>Price Decreased</b>"
         else:
-            header = "\U0001F504 <b>تعديل في المنتج | Product Updated</b>"
-    lines = [header, f"\U0001F3F7\U0000FE0F <b>{name}</b>"]
-    lines.append(f"\U0001F3EA المصدر | Source: <b>الاشتراكات المميزة | Featured Subscriptions</b>")
+            header_ar = "\U0001F504 <b>تعديل في المنتج</b>"
+            header_en = "\U0001F504 <b>Product Updated</b>"
+    lines_ar = [header_ar, f"\U0001F3F7\U0000FE0F <b>{name}</b>"]
+    lines_en = [header_en, f"\U0001F3F7\U0000FE0F <b>{name}</b>"]
+    lines_ar.append(f"\U0001F3EA المصدر: <b>الاشتراكات المميزة</b>")
+    lines_en.append(f"\U0001F3EA Source: <b>Featured Subscriptions</b>")
     if price_new is not None:
         try:
             _price_block = await _fpa(price_new or 0)
@@ -229,15 +251,19 @@ async def format_local_update(ev: dict) -> str:
                     pass
             for _pl in _price_block.split(chr(10)):
                 if _pl.strip():
-                    lines.append(f"\U0001F4B0 {_pl.strip().replace('السعر:', 'السعر | Price:').replace('ريال سعودي', 'ريال سعودي | Saudi riyals').replace('ريال يمني', 'ريال يمني | Yemeni riyals')}")
+                    lines_ar.append(f"\U0001F4B0 {_pl.strip()}")
+                    _en = _pl.strip().replace("السعر:", "Price:").replace("ريال سعودي", "Saudi riyals").replace("ريال يمني", "Yemeni riyals")
+                    lines_en.append(f"\U0001F4B0 {_en}")
         except Exception:
-            lines.append(f"\U0001F4B0 السعر | Price: <b>{price_new}</b>")
+            lines_ar.append(f"\U0001F4B0 السعر: <b>{price_new}</b>")
+            lines_en.append(f"\U0001F4B0 Price: <b>{price_new}</b>")
     if stock_new is not None:
-        lines.append(f"\U0001F4E6 الكمية المتبقية | Remaining quantity: <b>{stock_new}</b>")
+        lines_ar.append(f"\U0001F4E6 الكمية المتبقية: <b>{stock_new}</b>")
+        lines_en.append(f"\U0001F4E6 Remaining quantity: <b>{stock_new}</b>")
     if stock_new is not None and 0 < stock_new <= 5 and kind != "out":
-        lines.append(f"\U000026A0\U0000FE0F على وشك النفاذ! تبقى <b>{stock_new}</b> فقط | Almost out! Only <b>{stock_new}</b> left")
-    return chr(10).join(lines)
-
+        lines_ar.append(f"\U000026A0\U0000FE0F على وشك النفاذ! تبقى <b>{stock_new}</b> فقط")
+        lines_en.append(f"\U000026A0\U0000FE0F Almost out! Only <b>{stock_new}</b> left")
+    return chr(10).join(lines_ar) + chr(10) + "==============" + chr(10) + chr(10).join(lines_en)
 def _mask_user_id(user_id) -> str:
     s = str(user_id or "")
     if len(s) <= 5:
@@ -253,22 +279,33 @@ def format_purchase_post(product_name, qty, total_str, payment_name, buyer_id, o
     masked = _mask_user_id(buyer_id)
     now = datetime.now(timezone.utc) + timedelta(hours=3)
     when = now.strftime("%Y-%m-%d %H:%M")
-    lines = [
-        "\U0001F6D2 <b>عملية شراء جديدة! | New purchase!</b>",
+    lines_ar = [
+        "\U0001F6D2 <b>عملية شراء جديدة!</b>",
         "",
-        f"\U0001F4E6 المنتج | Product: <b>{name}</b>",
-        f"\U0001F522 الكمية | Quantity: <b>{qty}</b>",
-        f"\U0001F4B0 الإجمالي | Total: <b>{_html.escape(str(total_str), quote=False)}</b>",
-        f"\U0001F4B3 طريقة الدفع | Payment method: <b>{pay}</b>",
-        f"\U0001F552 الوقت | Time: <b>{when}</b>",
-        f"\U0001F464 المشتري | Buyer: <code>{masked}</code>",
-        f"\U0001F522 رقم الطلب | Order #: <code>#{order_id}</code>",
+        f"\U0001F4E6 المنتج: <b>{name}</b>",
+        f"\U0001F522 الكمية: <b>{qty}</b>",
+        f"\U0001F4B0 الإجمالي: <b>{_html.escape(str(total_str), quote=False)}</b>",
+        f"\U0001F4B3 طريقة الدفع: <b>{pay}</b>",
+        f"\U0001F552 الوقت: <b>{when}</b>",
+        f"\U0001F464 المشتري: <code>{masked}</code>",
+        f"\U0001F522 رقم الطلب: <code>#{order_id}</code>",
         "",
-        "\U00002705 <b>تم التوصيل بنجاح | Delivered successfully</b>",
+        "\U00002705 <b>تم التوصيل بنجاح</b>",
     ]
-    return chr(10).join(lines)
-
-
+    lines_en = [
+        "\U0001F6D2 <b>New purchase!</b>",
+        "",
+        f"\U0001F4E6 Product: <b>{name}</b>",
+        f"\U0001F522 Quantity: <b>{qty}</b>",
+        f"\U0001F4B0 Total: <b>{_html.escape(str(total_str), quote=False)}</b>",
+        f"\U0001F4B3 Payment method: <b>{pay}</b>",
+        f"\U0001F552 Time: <b>{when}</b>",
+        f"\U0001F464 Buyer: <code>{masked}</code>",
+        f"\U0001F522 Order #: <code>#{order_id}</code>",
+        "",
+        "\U00002705 <b>Delivered successfully</b>",
+    ]
+    return chr(10).join(lines_ar) + chr(10) + "==============" + chr(10) + chr(10).join(lines_en)
 async def send_purchase_post(bot, product_name, qty, total_str, payment_name, buyer_id, order_id) -> bool:
     try:
         text = format_purchase_post(product_name, qty, total_str, payment_name, buyer_id, order_id)
