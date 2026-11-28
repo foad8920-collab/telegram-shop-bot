@@ -11,7 +11,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 from bot.database.methods import get_user_referral, buy_item_transaction, process_payment_with_referral, create_pending_payment
-from bot.database.methods.transactions import prepare_stackvault_purchase, finalize_stackvault_purchase
+from bot.database.methods.transactions import prepare_stackvault_purchase, finalize_stackvault_purchase, admin_balance_change
 from bot.keyboards import back, payment_menu, close, get_payment_choice
 from bot.logger_mesh import logger
 from bot.database.methods.audit import log_audit
@@ -20,6 +20,7 @@ from bot.misc import EnvKeys, ItemPurchaseRequest, validate_telegram_id, validat
 from bot.handlers.other import _any_payment_method_enabled, is_safe_item_name, caller_name
 from bot.misc.metrics import get_metrics
 from bot.misc.services import CryptoPayAPI, CryptoPayAPIError, send_stars_invoice, send_fiat_invoice, StackVaultClient, StackVaultAPIError
+from bot.misc.services.txid_verify import classify_txid_method, validate_txid_format, verify_binance_pay_txid, verify_tron_usdt_txid
 from bot.misc.services.payment import _minor_units_for, payload_amount
 from bot.filters import ValidAmountFilter
 from bot.i18n import localize, esc
@@ -723,9 +724,10 @@ async def buy_item_callback_handler(call: CallbackQuery, state: FSMContext):
 # ============================================================
 #   التحويل اليدوي (صورة السند)  شحن الرصيد
 # ============================================================
-from bot.database.models.main import TopUpRequest, PaymentMethod, User
+from bot.database.models.main import TopUpRequest, PaymentMethod, User, VerifiedTransaction
 from bot.database.main import Database
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 import logging as _topup_logging
 
 _topup_logger = _topup_logging.getLogger(__name__)
@@ -831,17 +833,150 @@ async def pay_manual_show_account(call: CallbackQuery, state: FSMContext):
 
     await state.update_data(payment_method_id=method_id, payment_method_name=pm.name)
 
+    _txid_kind = classify_txid_method(pm.name or "")
+    if _txid_kind:
+        _instruction = " قم بتحويل المبلغ، ثم أرسل <b>ايدي العملية (TxID)</b> هنا - انسخه من تطبيق بينانس/محفظتك - أو أرسل <b>صورة السند</b>."
+    else:
+        _instruction = " قم بتحويل المبلغ، ثم أرسل <b>صورة سند الحوالة</b> هنا."
+
     _entered_txt, _usd_txt = _topup_display(data)
     await call.message.edit_text(
         f" <b>{pm.name}</b>\n\n"
         f" المبلغ: <b>{_entered_txt}</b>\n\n"
         f" <b>رقم الحساب / التعليمات:</b>\n"
         f"<code>{pm.account_info}</code>\n\n"
-        f" قم بتحويل المبلغ، ثم أرسل <b>صورة سند الحوالة</b> هنا.",
+        f" {_instruction}",
         parse_mode="HTML"
     )
     await state.set_state(BalanceStates.waiting_receipt)
 
+
+@router.message(BalanceStates.waiting_receipt, F.text)
+async def pay_manual_txid(message: Message, state: FSMContext):
+    """Verify a pasted TxID (Binance Pay / USDT TRC20) and auto-credit the balance.
+
+    Photo receipts stay the path for Yemeni wallets (no API); Binance and
+    crypto are verified automatically and never need a photo.
+    """
+    text = (message.text or "").strip()
+    if text.startswith("/"):
+        return
+    data = await state.get_data()
+    amount_raw = data.get("amount")
+    pm_id = data.get("payment_method_id")
+    pm_name = data.get("payment_method_name") or ""
+    if not amount_raw or not pm_id:
+        await message.answer(" انتهت الجلسة. ابدأ الشحن من جديد.")
+        await state.clear()
+        return
+    kind = classify_txid_method(pm_name)
+    if not kind:
+        await message.answer(" هذه الطريقة تحتاج صورة سند الحوالة - أرسل الصورة هنا.")
+        return
+    txid = text
+    if not validate_txid_format(kind, txid):
+        if kind == "binance_pay":
+            hint = "ايدي عملية بينانس يبدأ بـ M_P_ - انسخه من تفاصيل التحويل في تطبيق بينانس."
+        else:
+            hint = "رقم عملية ترون 64 حرفا (أرقام وحروف a-f) - انسخه من محفظتك."
+        await message.answer(f" رقم العملية غير صحيح. {hint}")
+        return
+    try:
+        expected = Decimal(str(amount_raw))
+    except Exception:
+        await message.answer(" انتهت الجلسة. ابدأ الشحن من جديد.")
+        await state.clear()
+        return
+    # Ensure the replay-protection table exists (no-op if Alembic made it).
+    async with Database().session() as session:
+        await session.run_sync(lambda s: VerifiedTransaction.__table__.create(s, checkfirst=True))
+        await session.commit()
+    # Replay protection: reject an already-used TxID before calling the APIs.
+    async with Database().session() as session:
+        used = (await session.execute(
+            select(VerifiedTransaction).where(VerifiedTransaction.txid == txid)
+        )).scalar_one_or_none()
+        if used is not None:
+            await message.answer(" هذا الايدي مستخدم من قبل - لا يمكن شحن الرصيد به مرة أخرى.")
+            return
+    try:
+        if kind == "binance_pay":
+            ok, received, reason = await verify_binance_pay_txid(txid, expected)
+        else:
+            ok, received, reason = await verify_tron_usdt_txid(txid, expected)
+    except Exception as e:
+        logger.warning("TxID verify failed for %s: %s", txid, e)
+        await message.answer(" تعذر التحقق الآن - حاول بعد دقيقة، أو أرسل صورة السند.")
+        return
+    if not ok:
+        if reason == "not_found":
+            await message.answer(" لم أجد هذه العملية بعد - تأكد من نسخ الايدي كاملا، وإن كنت حوّلت للتو انتظر دقيقة ثم أعد إرساله.")
+        elif reason == "wrong_receiver":
+            await message.answer(" هذه العملية لم تصل إلى حساب المتجر - تأكد أنك حوّلت إلى الرقم/العنوان الصحيح.")
+        elif reason == "amount_low":
+            arrived = f"${received}" if received is not None else "مبلغ أقل"
+            await message.answer(f" المبلغ المحوَّل ({arrived}) أقل من المطلوب (${expected}) - أكمل الفرق بعملية جديدة أو أرسل صورة السند.")
+        elif reason == "wrong_type":
+            await message.answer(" هذه العملية ليست تحويل Binance Pay بين مستخدمين - تأكد من الايدي.")
+        elif reason == "tx_failed":
+            await message.answer(" هذه العملية موجودة لكنها فاشلة على الشبكة - تحقق من محفظتك.")
+        elif reason == "not_configured":
+            await message.answer(" التحقق التلقائي غير مفعّل بعد - أرسل صورة السند.")
+        else:
+            await message.answer(" تعذر التحقق الآن - حاول بعد دقيقة، أو أرسل صورة السند.")
+        return
+    # Record the TxID first (unique): a second use is rejected even if credit fails below.
+    try:
+        async with Database().session() as session:
+            session.add(VerifiedTransaction(
+                txid=txid, method=kind, user_id=message.from_user.id,
+                amount_usd=received, used_for="topup",
+            ))
+            await session.commit()
+    except IntegrityError:
+        await message.answer(" هذا الايدي مستخدم من قبل - لا يمكن شحن الرصيد به مرة أخرى.")
+        return
+    except Exception as e:
+        logger.warning("VerifiedTransaction insert failed for %s: %s", txid, e)
+        await message.answer(" تم التحقق لكن تعذر تسجيل العملية - تواصل مع الدعم.")
+        return
+    credited, _msg = await admin_balance_change(message.from_user.id, received)
+    if not credited:
+        await message.answer(" تم التحقق من العملية وسُجلت، لكن تعذر شحن الرصيد - تواصل مع الدعم وسيتم الشحن يدويا.")
+        await state.clear()
+        return
+    # New balance for the confirmation.
+    new_balance = None
+    try:
+        async with Database().session() as session:
+            _u = (await session.execute(select(User).where(User.telegram_id == message.from_user.id))).scalar_one_or_none()
+            if _u is not None and _u.balance is not None:
+                new_balance = _u.balance
+    except Exception:
+        new_balance = None
+    _entered_txt, _usd_txt = _topup_display(data)
+    _bal_line = f"\n رصيدك الآن: <b>${new_balance}</b>" if new_balance is not None else ""
+    await message.answer(
+        f" تم التحقق من العملية!\n\n"
+        f" شُحن رصيدك بـ <b>${received}</b> (المطلوب كان {_entered_txt}).{_bal_line}",
+        parse_mode="HTML",
+    )
+    for admin_id in _get_admin_ids_topup():
+        try:
+            await message.bot.send_message(
+                chat_id=admin_id,
+                text=(
+                    f" شحن تلقائي موثّق\n\n"
+                    f" المستخدم: <code>{message.from_user.id}</code>\n"
+                    f" المبلغ: <b>${received}</b>\n"
+                    f" الطريقة: <b>{pm_name}</b>\n"
+                    f" العملية: <code>{txid}</code>"
+                ),
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            logger.warning("Admin auto-topup notify failed: %s", e)
+    await state.clear()
 
 @router.message(BalanceStates.waiting_receipt, F.photo)
 async def pay_manual_receipt(message: Message, state: FSMContext):
