@@ -487,8 +487,7 @@ async def payment_balance_handler(call: CallbackQuery, state: FSMContext) -> Non
             # نضع FSM للمشتري  للاستقبال الفوري
             try:
                 from aiogram.fsm.storage.base import StorageKey
-                from bot.states import LocalBuy
-from bot.i18n import get_current_locale as _LB
+                from bot.states import LocalBuy as _LB
                 # نحتاج dispatcher  نأخذه من call (لا يوجد)، لذا نعتمد على DB-fallback
                 # سيتولى customer_data_handler  لكننا نحتاج state
                 # الطريقة الأنظف: نضع حالة FSM عبر storage إن أمكن
