@@ -2293,38 +2293,39 @@ def create_admin_app(bot: Any = None) -> Starlette:
     admin.add_view(BotButtonView)
     admin.add_view(PaymentMethodView)
 
-    # SubWorld panel (separate database, same login): served at /subworld
-    # through a small ASGI dispatcher, NOT app.mount(). A plain mount makes
-    # SQLAdmin's url_for("admin:...") resolve to the Yemen panel: both
-    # panels register a route named "admin" and Starlette picks the first
-    # one, so every SubWorld link (login, logout, logo) lands on Yemen.
-    # The dispatcher calls the SubWorld app directly, so its own router
-    # owns the "admin" name and all its links stay inside /subworld.
-    # Only root_path is extended; path/raw_path are left untouched,
-    # exactly like Mount does (stripping the path breaks matching).
-    # Guarded so a SubWorld problem can never break the Yemen panel.
-    try:
-        from subworld.admin import create_subworld_admin_app
+    # SubWorld panel DISABLED 2026-11-28 (merge into the Yemen bot). Uncomment the block below to re-enable.
+#     # SubWorld panel (separate database, same login): served at /subworld
+#     # through a small ASGI dispatcher, NOT app.mount(). A plain mount makes
+#     # SQLAdmin's url_for("admin:...") resolve to the Yemen panel: both
+#     # panels register a route named "admin" and Starlette picks the first
+#     # one, so every SubWorld link (login, logout, logo) lands on Yemen.
+#     # The dispatcher calls the SubWorld app directly, so its own router
+#     # owns the "admin" name and all its links stay inside /subworld.
+#     # Only root_path is extended; path/raw_path are left untouched,
+#     # exactly like Mount does (stripping the path breaks matching).
+#     # Guarded so a SubWorld problem can never break the Yemen panel.
+#     try:
+#         from subworld.admin import create_subworld_admin_app
 
-        _subworld_app = create_subworld_admin_app()
+#         _subworld_app = create_subworld_admin_app()
 
-        class _SubWorldDispatcher:
-            """Route /subworld/* to the SubWorld app, everything else through."""
+#         class _SubWorldDispatcher:
+#             """Route /subworld/* to the SubWorld app, everything else through."""
 
-            def __init__(self, app):
-                self.app = app
+#             def __init__(self, app):
+#                 self.app = app
 
-            async def __call__(self, scope, receive, send):
-                if scope["type"] == "http" and scope["path"].startswith("/subworld"):
-                    sub_scope = dict(scope)
-                    sub_scope["root_path"] = scope.get("root_path", "") + "/subworld"
-                    await _subworld_app(sub_scope, receive, send)
-                    return
-                await self.app(scope, receive, send)
+#             async def __call__(self, scope, receive, send):
+#                 if scope["type"] == "http" and scope["path"].startswith("/subworld"):
+#                     sub_scope = dict(scope)
+#                     sub_scope["root_path"] = scope.get("root_path", "") + "/subworld"
+#                     await _subworld_app(sub_scope, receive, send)
+#                     return
+#                 await self.app(scope, receive, send)
 
-        app = _SubWorldDispatcher(app)
-        logging.info("SubWorld admin panel served at /subworld")
-    except Exception:
-        logging.exception("SubWorld admin panel mount failed - Yemen panel unaffected")
+#         app = _SubWorldDispatcher(app)
+#         logging.info("SubWorld admin panel served at /subworld")
+#     except Exception:
+#         logging.exception("SubWorld admin panel mount failed - Yemen panel unaffected")
 
     return app

@@ -36,10 +36,11 @@ async def _run_subworld_bot():
         logger.exception("SubWorld bot failed: %s", e)
 
 async def main():
-    """تشغيل البوتات معًا بشكل متوازي (SubWorld هو البوت الرئيسي)."""
-    logger.info("Starting bots together (SubWorld is the main bot)...")
+    """تشغيل البوتين معًا بشكل متوازي."""
+    logger.info("Starting shop bot and support bot together...")
+    # SubWorld stopped 2026-11-28 (merge into the Yemen bot).
+    # To re-enable: add _run_subworld_bot() back into the gather below.
     await asyncio.gather(
-        _run_subworld_bot(),
         _run_shop_bot(),
         _run_support_bot(),
     )
