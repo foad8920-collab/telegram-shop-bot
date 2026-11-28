@@ -28,7 +28,7 @@ from bot.database.models.main import (
     LocalSubscriptionOrder, LocalSubscriptionCode, VerifiedTransaction,
 )
 from bot.states import LocalBuy
-from bot.misc.services.txid_verify import classify_txid_method, validate_txid_format, verify_binance_pay_txid, verify_tron_usdt_txid, copyable_account_value, account_info_rest_lines, payment_method_order_key, TxVerifyError
+from bot.misc.services.txid_verify import classify_txid_method, validate_txid_format, verify_binance_pay_txid, verify_tron_usdt_txid, copyable_account_value, account_info_rest_lines, payment_method_order_key, TxVerifyError, account_info_display_lines
 from bot.misc.services.updates_channel import send_purchase_post
 
 
@@ -557,13 +557,7 @@ async def payment_method_handler(call: CallbackQuery, state: FSMContext) -> None
     if is_verifiable:
         # الطريقة الآلية: التحقق من ايدي العملية (TxID) عبر API
         await state.set_state(LocalBuy.waiting_binance_code)
-        _copy_value = copyable_account_value(pm.name, pm.account_info)
-        _account_lines = []
-        if _copy_value:
-            _account_lines.append(f"<code>{_copy_value}</code>")
-            _account_lines.extend(account_info_rest_lines(pm.account_info, _copy_value))
-        else:
-            _account_lines.append(f"<code>{pm.account_info}</code>")
+        _account_lines = account_info_display_lines(pm.name, pm.account_info)
         _hint = "ايدي عملية بينانس يبدأ بـ M_P_." if _txid_kind == "binance_pay" else "ايدي عملية ترون مكوّن من 64 حرفا ورقما."
         text = NL.join([
             f" <b>الدفع عبر {pm.name}</b>",
@@ -594,7 +588,7 @@ async def payment_method_handler(call: CallbackQuery, state: FSMContext) -> None
         f" المبلغ المطلوب: <b>{_fmt(total)}</b>",
         "",
         " <b>بيانات الحساب:</b>",
-        f"<code>{pm.account_info}</code>",
+        *account_info_display_lines(pm.name, pm.account_info),
         "",
         "",
         " حوّل المبلغ إلى الحساب أعلاه.",

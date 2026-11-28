@@ -362,3 +362,22 @@ def payment_method_order_key(method) -> tuple:
     if kind == "tron_usdt":
         return (1, getattr(method, "id", 0))
     return (2, getattr(method, "id", 0))
+
+
+def account_info_display_lines(method_name: str, account_info: str) -> list[str]:
+    """Lines for the account display: each copyable value alone in <code>.
+
+    Binance/Crypto: the single Pay ID / address in one code span, the rest
+    plain lines. Wallets: every long number (account number, 9+ digits)
+    in its own code span, labels, rates and names plain. Falls back to
+    the whole block in one code span when nothing copyable is found.
+    """
+    value = copyable_account_value(method_name, account_info)
+    if value:
+        lines = [f"<code>{value}</code>"]
+        lines.extend(account_info_rest_lines(account_info, value))
+        return lines
+    rendered = re.sub(r"\d{9,}", lambda m: f"<code>{m.group(0)}</code>", account_info or "")
+    if rendered != (account_info or ""):
+        return rendered.split("\n")
+    return [f"<code>{account_info}</code>"]

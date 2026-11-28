@@ -20,7 +20,7 @@ from bot.database.models.main import (
     SupplierOrder, User, VerifiedTransaction,
 )
 from bot.states import SupplierBuy
-from bot.misc.services.txid_verify import classify_txid_method, validate_txid_format, verify_binance_pay_txid, verify_tron_usdt_txid, copyable_account_value, account_info_rest_lines, payment_method_order_key, TxVerifyError
+from bot.misc.services.txid_verify import classify_txid_method, validate_txid_format, verify_binance_pay_txid, verify_tron_usdt_txid, copyable_account_value, account_info_rest_lines, payment_method_order_key, TxVerifyError, account_info_display_lines
 from bot.misc import EnvKeys
 from bot.database.methods.transactions import format_price_arabic_async
 
@@ -594,13 +594,7 @@ async def supplier_buy_wallet(call: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(sb_payment_method_id=pm.id, sb_payment_method_name=pm.name)
     await state.set_state(SupplierBuy.waiting_wallet_proof)
     _txid_kind = classify_txid_method(pm.name or "")
-    _copy_value = copyable_account_value(pm.name, pm.account_info)
-    _account_lines = []
-    if _copy_value:
-        _account_lines.append(f"<code>{_copy_value}</code>")
-        _account_lines.extend(account_info_rest_lines(pm.account_info, _copy_value))
-    else:
-        _account_lines.append(f"<code>{pm.account_info}</code>")
+    _account_lines = account_info_display_lines(pm.name, pm.account_info)
     if _txid_kind:
         _steps = [
             "1) حوّل المبلغ للحساب اعلاه.",
