@@ -18,6 +18,20 @@ from bot.database.models.main import Supplier, SupplierProduct
 from bot.database.methods.transactions import format_price_arabic_async
 from bot.i18n import get_current_locale
 
+def _translate_source(display: str) -> str:
+    d = display or ""
+    if "المميزة" in d:
+        return "Featured Subscriptions"
+    if "عبر الفئات المتنوعة والجديدة" in d:
+        return "Across diverse and new categories"
+    if "متنوعه ومختلفة وحديثة" in d or "متنوعة ومختلفة وحديثة" in d:
+        return "Diverse, varied and modern"
+    if "جديدة ومتنوعة" in d:
+        return "New and diverse"
+    if d.startswith("اشتراكات"):
+        return "Subscriptions"
+    return d
+
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -60,7 +74,7 @@ async def _build_categories_kb(
     async with Database().session() as session:
         supplier = await session.get(Supplier, supplier_id)
         if supplier is None:
-            return " المورد غير موجود.", InlineKeyboardMarkup(inline_keyboard=[])
+            return (" Supplier not found." if get_current_locale() == "en" else " المورد غير موجود."), InlineKeyboardMarkup(inline_keyboard=[])
 
         # Counts
         total_cats_result = await session.execute(
@@ -268,7 +282,7 @@ async def _build_categories_kb(
         rows.append(nav)
 
     rows.append([InlineKeyboardButton(
-        text=" البحث في المنتجات",
+        text=(" Search products" if get_current_locale() == "en" else " البحث في المنتجات"),
         callback_data=f"sv_search:{supplier_id}",
         style="primary",
     )])
@@ -358,7 +372,7 @@ async def _build_products_kb(supplier_id: int, category: str, page: int) -> tupl
     async with Database().session() as session:
         supplier = await session.get(Supplier, supplier_id)
         if supplier is None:
-            return " المورد غير موجود.", InlineKeyboardMarkup(inline_keyboard=[])
+            return (" Supplier not found." if get_current_locale() == "en" else " المورد غير موجود."), InlineKeyboardMarkup(inline_keyboard=[])
 
         result = await session.execute(
             select(SupplierProduct)
@@ -504,7 +518,7 @@ async def supplier_product_detail_handler(call: CallbackQuery, state: FSMContext
     async with Database().session() as session:
         prod = await session.get(SupplierProduct, product_id)
         if prod is None or prod.supplier_id != supplier_id:
-            await call.answer(" المنتج غير موجود.", show_alert=True)
+            await call.answer(" Product not found." if get_current_locale() == "en" else " المنتج غير موجود.", show_alert=True)
             return
 
     name = prod.name or ""
@@ -578,27 +592,28 @@ async def supplier_search_start_handler(call: CallbackQuery, state: FSMContext) 
     async with Database().session() as session:
         supplier = await session.get(Supplier, supplier_id)
         if supplier is None:
-            await call.answer(" المورد غير موجود.", show_alert=True)
+            await call.answer(" Supplier not found." if get_current_locale() == "en" else " المورد غير موجود.", show_alert=True)
             return
 
     name = supplier.display_name or supplier.name
+    display_name = _translate_source(name) if get_current_locale() == "en" else name
 
     await state.update_data(search_supplier_id=supplier_id)
     await state.set_state(SupplierSearch.waiting_query)
 
     text = NL.join([
-        f" <b>البحث في {name}</b>",
+        (f" <b>Search in {display_name}</b>" if get_current_locale() == "en" else f" <b>البحث في {name}</b>"),
         "",
-        " <b>أرسل كلمة للبحث عنها:</b>",
+        (" <b>Send a word to search for:</b>" if get_current_locale() == "en" else " <b>أرسل كلمة للبحث عنها:</b>"),
         "",
         "<i>مثال: Netflix, ChatGPT, Adobe, VPN...</i>",
         "",
-        " للإلغاء أرسل: <code>/cancel</code>",
+        (" To cancel, send: <code>/cancel</code>" if get_current_locale() == "en" else " للإلغاء أرسل: <code>/cancel</code>"),
     ])
 
     markup = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=" إلغاء",
+            text=(" Cancel" if get_current_locale() == "en" else " إلغاء"),
             callback_data=f"shop_supplier_{supplier_id}",
             style="danger",
         )],
@@ -617,22 +632,22 @@ async def supplier_search_message_handler(message: Message, state: FSMContext) -
 
     if query == "/cancel":
         await state.clear()
-        await message.answer(" تم الإلغاء.")
+        await message.answer(" Cancelled." if get_current_locale() == "en" else " تم الإلغاء.")
         return
 
     if len(query) < 2:
-        await message.answer(" الكلمة قصيرة جداً. أرسل كلمة أطول.")
+        await message.answer(" The word is too short. Send a longer word." if get_current_locale() == "en" else " الكلمة قصيرة جداً. أرسل كلمة أطول.")
         return
 
     if len(query) > 50:
-        await message.answer(" الكلمة طويلة جداً (الحد 50 حرف).")
+        await message.answer(" The word is too long (max 50 characters)." if get_current_locale() == "en" else " الكلمة طويلة جداً (الحد 50 حرف).")
         return
 
     data = await state.get_data()
     supplier_id = data.get("search_supplier_id")
 
     if not supplier_id:
-        await message.answer(" انتهت الجلسة.")
+        await message.answer(" Session expired." if get_current_locale() == "en" else " انتهت الجلسة.")
         await state.clear()
         return
 
@@ -659,10 +674,10 @@ async def supplier_search_message_handler(message: Message, state: FSMContext) -
 
     if not products:
         text = NL.join([
-            f" <b>البحث عن: {query}</b>",
+            (f" <b>Search for: {query}</b>" if get_current_locale() == "en" else f" <b>البحث عن: {query}</b>"),
             "",
-            " لا توجد نتائج.",
-            " جرّب كلمة أخرى.",
+            (" No results found." if get_current_locale() == "en" else " لا توجد نتائج."),
+            (" Try another word." if get_current_locale() == "en" else " جرّب كلمة أخرى."),
         ])
         markup = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=(" New search" if get_current_locale() == "en" else " بحث جديد"), callback_data=f"sv_search:{supplier_id}", style="primary")],
@@ -707,9 +722,9 @@ async def supplier_search_message_handler(message: Message, state: FSMContext) -
     )])
 
     text = NL.join([
-        f" <b>البحث عن: {query}</b>",
+        (f" <b>Search for: {query}</b>" if get_current_locale() == "en" else f" <b>البحث عن: {query}</b>"),
         "",
-        f" تم إيجاد <b>{len(products)}</b> نتيجة:",
+        (f" Found <b>{len(products)}</b> result(s):" if get_current_locale() == "en" else f" تم إيجاد <b>{len(products)}</b> نتيجة:"),
     ])
 
     await message.answer(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
@@ -718,5 +733,5 @@ async def supplier_search_message_handler(message: Message, state: FSMContext) -
 @router.message(SupplierSearch.waiting_query)
 async def supplier_search_wrong_type_handler(message: Message, state: FSMContext) -> None:
     """Handle non-text during search."""
-    await message.answer(" الرجاء إرسال كلمة بحث نصية.")
+    await message.answer(" Please send a text search word." if get_current_locale() == "en" else " الرجاء إرسال كلمة بحث نصية.")
 
