@@ -643,7 +643,7 @@ def _local_subscriptions_keyboard(items: list, supplier_items: list | None = Non
             style = "danger"
         cb = f"sv_prod:{prod.supplier_id}:{prod.id}"
         rows.append([InlineKeyboardButton(text=text, callback_data=cb, style=style)])
-    rows.append([InlineKeyboardButton(text=" البحث في الاشتراكات المحلية", callback_data="local_search", style="primary")])
+    rows.append([InlineKeyboardButton(text=(" Search Featured Subscriptions" if get_current_locale() == "en" else " البحث في الاشتراكات المميزة"), callback_data="local_search", style="primary")])
     rows.append([InlineKeyboardButton(text=" رجوع", callback_data="back_to_menu", style="primary")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -674,7 +674,7 @@ async def shop_local_handler(call: CallbackQuery, state: FSMContext):
     except Exception as e:
         logger.exception("Failed to load local subscriptions: %s", e)
         await call.message.edit_text(
-            " تعذّر تحميل الاشتراكات المحلية. حاول لاحقًا.",
+            ("Could not load Featured Subscriptions. Please try again later." if get_current_locale() == "en" else " تعذّر تحميل الاشتراكات المميزة. حاول لاحقًا."),
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text=" رجوع", callback_data="back_to_menu", style="danger")
             ]])
@@ -683,7 +683,7 @@ async def shop_local_handler(call: CallbackQuery, state: FSMContext):
 
     if not items and not supplier_items:
         await call.message.edit_text(
-            " لا توجد اشتراكات محلية متاحة حاليًا.",
+            ("No featured subscriptions available right now." if get_current_locale() == "en" else " لا توجد اشتراكات مميزة متاحة حاليًا."),
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text=" رجوع", callback_data="back_to_menu", style="primary")
             ]])
@@ -691,8 +691,8 @@ async def shop_local_handler(call: CallbackQuery, state: FSMContext):
         return
 
     await call.message.edit_text(
-        " <b>الاشتراكات المحلية المتوفرة:</b>\n"
-        "اختر الاشتراك الذي تريد شراءه:",
+        ("<b>Available Featured Subscriptions:</b>\nChoose the subscription you want to buy:"
+         if get_current_locale() == "en" else " <b>الاشتراكات المميزة المتوفرة:</b>\nاختر الاشتراك الذي تريد شراءه:"),
         parse_mode="HTML",
         reply_markup=_local_subscriptions_keyboard(items, supplier_items)
     )

@@ -17,6 +17,7 @@ from bot.database.models.main import (
     LocalSubscription, SupplierProduct, Supplier,
 )
 from bot.states import ShopStates
+from bot.i18n import get_current_locale
 
 
 logger = logging.getLogger(__name__)
@@ -90,7 +91,7 @@ async def shop_search_start_handler(call: CallbackQuery, state: FSMContext) -> N
         "",
         " <b>أرسل كلمة للبحث عنها:</b>",
         "",
-        " يشمل البحث: <b>الاشتراكات المحلية</b> + <b>موردي المتجر</b>",
+        ("Search covers: <b>Featured Subscriptions</b> + <b>Store suppliers</b>" if get_current_locale() == "en" else " يشمل البحث: <b>الاشتراكات المميزة</b> + <b>موردي المتجر</b>"),
         "",
         " للإلغاء: <code>/cancel</code>",
     ])
@@ -191,7 +192,7 @@ async def shop_search_query_handler(message: Message, state: FSMContext) -> None
 
     if local_items:
         rows.append([InlineKeyboardButton(
-            text=f" الاشتراكات المحلية ({len(local_items)})",
+            text=(f" Featured Subscriptions ({len(local_items)})" if get_current_locale() == "en" else f" الاشتراكات المميزة ({len(local_items)})"),
             callback_data="noop",
             style="primary",
         )])
@@ -244,7 +245,7 @@ async def local_search_start_handler(call: CallbackQuery, state: FSMContext) -> 
     await _safe_answer(call)
 
     text = NL.join([
-        " <b>البحث في الاشتراكات المحلية</b>",
+        ("<b>Search in Featured Subscriptions</b>" if get_current_locale() == "en" else " <b>البحث في الاشتراكات المميزة</b>"),
         "",
         " <b>أرسل كلمة للبحث عنها:</b>",
         "",
@@ -317,7 +318,7 @@ async def _search_local_only(message: Message, query: str, query_lower: str) -> 
         text = NL.join([
             f" <b>البحث عن: {query}</b>",
             "",
-            " لا توجد نتائج في الاشتراكات المحلية.",
+            ("No results in Featured Subscriptions." if get_current_locale() == "en" else " لا توجد نتائج في الاشتراكات المميزة."),
         ])
         markup = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=" بحث جديد", callback_data="local_search", style="primary")],
@@ -333,7 +334,7 @@ async def _search_local_only(message: Message, query: str, query_lower: str) -> 
     text = NL.join([
         f" <b>البحث عن: {query}</b>",
         "",
-        f" <b>الاشتراكات المحلية</b> ({len(items)} نتيجة):",
+        (f"<b>Featured Subscriptions</b> ({len(items)} results):" if get_current_locale() == "en" else f" <b>الاشتراكات المميزة</b> ({len(items)} نتيجة):"),
     ])
 
     await message.answer(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
@@ -396,7 +397,7 @@ async def _search_all(message: Message, query: str, query_lower: str) -> None:
 
     if local_items:
         rows.append([InlineKeyboardButton(
-            text=f" الاشتراكات المحلية ({len(local_items)})",
+            text=(f" Featured Subscriptions ({len(local_items)})" if get_current_locale() == "en" else f" الاشتراكات المميزة ({len(local_items)})"),
             callback_data="noop",
             style="primary",
         )])
