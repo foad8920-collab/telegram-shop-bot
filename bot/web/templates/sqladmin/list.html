@@ -148,7 +148,7 @@
                 </thead>
                 <tbody>
                   {% for row in pagination.rows %}
-                  <tr>
+                  <tr{% if model_view.identity == 'supplier-product' and row.is_available is defined %}{% if row.is_available %} class="table-success"{% else %} class="table-danger"{% endif %}{% endif %}>
                     <td>
                       <input type="hidden" value="{{ get_object_identifier(row) }}">
                       <input class="form-check-input m-0 align-middle select-box" type="checkbox"
