@@ -145,6 +145,15 @@ async def _startup(dp: Dispatcher, bot: Bot, ctx: AppContext, storage) -> None:
     register_all_handlers(dp)
     await register_models()
 
+    # Seed the 23 bilingual rules once (REPLACE mode, sentinel-guarded).
+    # Guarded so a seeding failure can never break startup.
+    try:
+        from bot.misc.services.rules_seed import ensure_yemen_rules_seeded
+
+        await ensure_yemen_rules_seeded()
+    except Exception:
+        logging.exception("Rules seeding failed - existing rules unaffected")
+
     # Security & authentication middleware
     security_middleware = SecurityMiddleware()
     auth_middleware = AuthenticationMiddleware()

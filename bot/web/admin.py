@@ -1221,6 +1221,7 @@ class BotRuleAdmin(ModelView, model=BotRule):
     column_list = [
         BotRule.id,
         BotRule.text,
+        BotRule.text_en,
         BotRule.sort_order,
         BotRule.is_active,
         BotRule.created_at,
@@ -1232,13 +1233,14 @@ class BotRuleAdmin(ModelView, model=BotRule):
     ]
     column_labels = {
         "text": "نص القانون",
+        "text_en": "النص الإنجليزي",
         "sort_order": "الترتيب",
         "is_active": "مفعل",
         "created_at": "أُنشئ",
         "updated_at": "آخر تحديث",
     }
-    column_searchable_list = [BotRule.text]
-    form_columns = ["text", "sort_order", "is_active"]
+    column_searchable_list = [BotRule.text, BotRule.text_en]
+    form_columns = ["text", "text_en", "sort_order", "is_active"]
     page_size = 50
 
 
