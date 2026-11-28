@@ -112,19 +112,28 @@ YEMEN_RULES: list[tuple[str, str]] = [
     ),
 ]
 
-RULE_1_AR = YEMEN_RULES[0][0]
+# Sentinel: rule 23's Arabic text. It MUST be a rule that does not exist
+# in the old 18 rules - rule 1 cannot be the sentinel, because the old
+# rule 1 is word-for-word identical to the new rule 1 (both name the
+# Yemen platform), so the v1.0 seeding wrongly thought the 23 were
+# already there and skipped, leaving the old 18 rules with no English.
+RULE_23_AR = YEMEN_RULES[22][0]
 
 
 async def ensure_yemen_rules_seeded() -> None:
     """Seed the 23 bilingual rules once (REPLACE mode, sentinel-guarded).
 
     Adds the text_en column if missing, then replaces the whole bot_rules
-    table with the 23 rules above - but only if rule 1's Arabic text is
+    table with the 23 rules above - but only if rule 23's Arabic text is
     not already there, so a later run (or rules the owner adds from the
     panel) are never touched.
     """
+    import logging
+
     from bot.database.main import Database as _DB
     from sqlalchemy import text as _sql_text
+
+    logger = logging.getLogger(__name__)
 
     async with _DB().session() as session:
         await session.execute(
@@ -132,10 +141,11 @@ async def ensure_yemen_rules_seeded() -> None:
         )
         found = await session.execute(
             _sql_text("SELECT 1 FROM bot_rules WHERE text = :t LIMIT 1"),
-            {"t": RULE_1_AR},
+            {"t": RULE_23_AR},
         )
         if found.scalar() is not None:
             await session.commit()
+            logger.info("Rules already seeded - skipping")
             return
         await session.execute(_sql_text("DELETE FROM bot_rules"))
         for i, (ar, en) in enumerate(YEMEN_RULES, start=1):
@@ -147,3 +157,4 @@ async def ensure_yemen_rules_seeded() -> None:
                 {"t": ar, "e": en, "s": i},
             )
         await session.commit()
+        logger.info("Seeded %d bilingual rules", len(YEMEN_RULES))
