@@ -10,7 +10,7 @@ from bot.misc import EnvKeys
 
 LANG_DIR = Path(__file__).parent / "languages"
 DEFAULT_LOCALE = "ar"
-SUPPORTED_LOCALES = ("ar", "en", "ru")
+SUPPORTED_LOCALES = ("ar", "en")
 
 _current_locale: ContextVar[str] = ContextVar("current_locale", default=DEFAULT_LOCALE)
 _USER_LANG_CACHE: dict[int, str] = {}

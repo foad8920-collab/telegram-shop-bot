@@ -21,7 +21,7 @@ from bot.keyboards import main_menu, back, profile_keyboard, check_sub, language
 from bot.keyboards.inline import profile_keyboard_async, welcome_after_check_keyboard
 from bot.misc import EnvKeys
 from bot.misc.metrics import get_metrics
-from bot.i18n import localize, set_current_locale, set_user_cache_locale, SUPPORTED_LOCALES, get_current_locale
+from bot.i18n import localize, set_current_locale, set_user_cache_locale, SUPPORTED_LOCALES
 from bot.logger_mesh import logger
 
 router = Router()
@@ -59,7 +59,7 @@ async def _build_welcome_text(user_id: int, first_name: str = "") -> str:
                     _wrates = await _wrates_fn()
                     _wyer_v = (_wD(str(user.balance)) * _wD(str(_wrates.get('usd_to_yer') or 535))).quantize(_wD('1'), rounding=_wHALF)
                     _wsar_v = (_wD(str(_wyer_v)) / _wD(str(_wrates.get('sar_to_yer') or 140))).quantize(_wD('0.01'), rounding=_wCEIL)
-                    balance_extra = NL + f"\U0001F1F8\U0001F1E6 {_wsar_v} ريال سعودي" + NL + f"\U0001F1FE\U0001F1EA {_wyer_v} ريال يمني"
+                    balance_extra = NL + f"\U0001F1F8\U0001F1E6 {_wsar_v} ريال سعودي | Saudi riyals" + NL + f"\U0001F1FE\U0001F1EA {_wyer_v} ريال يمني | Yemeni riyals"
                 except Exception:
                     pass
 
@@ -68,27 +68,35 @@ async def _build_welcome_text(user_id: int, first_name: str = "") -> str:
         pass
 
     name = (first_name or "").strip() or "عزيزي"
+    name_en = (first_name or "").strip()
+    greeting_en = f"Welcome, {name_en}!" if name_en else "Welcome!"
 
     if purchases_count == 0:
         purchases_str = "لا توجد مشتريات"
+        purchases_en = "No purchases"
     elif purchases_count == 1:
         purchases_str = "مشترى واحد"
+        purchases_en = "1 purchase"
     elif purchases_count == 2:
         purchases_str = "مشترى اثنان"
+        purchases_en = "2 purchases"
     elif purchases_count <= 10:
         purchases_str = f"{purchases_count} مشتريات"
+        purchases_en = f"{purchases_count} purchases"
     else:
         purchases_str = f"{purchases_count} مشترى"
+        purchases_en = f"{purchases_count} purchases"
 
     lines = [
         SEPARATOR,
         f"{EMOJI_STAR} <b>أهلاً بك، {name}!</b> {EMOJI_STAR}",
+        f"{EMOJI_STAR} <b>{greeting_en}</b> {EMOJI_STAR}",
         SEPARATOR,
-        f"{EMOJI_DIAMOND} رصيدك: <b>\U0001F1FA\U0001F1F8 {balance_str}$</b>{balance_extra}",
-        f"{EMOJI_GIFT} مشترياتك: <b>{purchases_str}</b>",
+        f"{EMOJI_DIAMOND} رصيدك | Balance: <b>\U0001F1FA\U0001F1F8 {balance_str}$</b>{balance_extra}",
+        f"{EMOJI_GIFT} مشترياتك | Purchases: <b>{purchases_str} | {purchases_en}</b>",
         SEPARATOR,
         "",
-        f"{EMOJI_ROCKET} <i>اختر من القائمة أدناه:</i>",
+        f"{EMOJI_ROCKET} <i>اختر من القائمة أدناه | Choose from the menu below:</i>",
     ]
     return NL.join(lines)
 
@@ -212,7 +220,10 @@ class SubscriptionGateMiddleware(BaseMiddleware):
     Only a verified member (True) passes. False (left/kicked) and None
     (check failed) are blocked with the join gate, exactly like /start.
     The check button itself ("sub_channel_done") is exempt: it is the
-    only way back in after subscribing.
+    only way back in after subscribing. The language buttons
+    ("choose_language" and "set_lang:*") are exempt too, so a new user
+    can switch to English before joining; the language handler itself
+    re-checks the subscription before showing the menu.
     """
 
     async def __call__(
@@ -223,7 +234,7 @@ class SubscriptionGateMiddleware(BaseMiddleware):
     ) -> Any:
         if not isinstance(event, CallbackQuery):
             return await handler(event, data)
-        if event.data == "sub_channel_done":
+        if event.data in ("sub_channel_done", "choose_language") or event.data.startswith("set_lang:"):
             return await handler(event, data)
         channel_username = _updates_channel_username()
         if not channel_username:
@@ -461,7 +472,7 @@ async def back_to_menu_prefixed_handler(call: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "choose_language")
 async def choose_language_callback_handler(call: CallbackQuery, state: FSMContext):
     """
-    Show language selection options (ar, en, ru).
+    Show language selection options (ar, en).
     """
     user_id = call.from_user.id
     await _ensure_user(user_id, tg_lang=call.from_user.language_code)
@@ -485,8 +496,20 @@ async def set_language_callback_handler(call: CallbackQuery, state: FSMContext):
 
     await call.answer(localize("language.changed"))
 
-    role = await check_role_cached(user_id) or 0
     channel_username = _updates_channel_username()
+    if channel_username:
+        # A new user who has not joined yet must see the gate again
+        # (in the language just chosen), never the menu.
+        subscribed = await _is_subscribed(call.bot, channel_username, user_id)
+        if subscribed is not True:
+            await call.message.edit_text(
+                localize("subscribe.prompt"),
+                reply_markup=check_sub(channel_username),
+            )
+            await state.clear()
+            return
+
+    role = await check_role_cached(user_id) or 0
     markup = await main_menu(role=role, channel=channel_username, helper=EnvKeys.HELPER_ID)
     await call.message.edit_text(localize("menu.title"), reply_markup=markup)
     await state.clear()
@@ -502,7 +525,6 @@ async def rules_callback_handler(call: CallbackQuery, state: FSMContext):
     from sqlalchemy import select as _select
 
     rules_text = ""
-    chunks = []
     try:
         async with _DB().session() as session:
             result = await session.execute(
@@ -510,46 +532,20 @@ async def rules_callback_handler(call: CallbackQuery, state: FSMContext):
             )
             rules = list(result.scalars().all())
             if rules:
-                locale = get_current_locale()
-                title = "📜 Rules" if locale == "en" else "📜 القوانين"
-                sep = "=" * 20
-                blocks = []
+                lines = []
                 for i, r in enumerate(rules, start=1):
-                    text = (r.text_en or "").strip() if locale == "en" else ""
-                    if not text:
-                        text = (r.text or "").strip()
-                    blocks.append(f"{i}. {_esc(text)}")
-                # Pack whole rules into messages that fit Telegram's
-                # 4000-char safe limit (separator between rules).
-                chunks = []
-                current = title
-                for block in blocks:
-                    if current == title:
-                        piece = NL + NL + block
-                    else:
-                        piece = NL + NL + sep + NL + NL + block
-                    if len(current) + len(piece) > 4000 and current != title:
-                        chunks.append(current)
-                        current = title + NL + NL + block
-                    else:
-                        current += piece
-                chunks.append(current)
+                    lines.append(f"{i}. {_esc((r.text or '').strip())}")
+                rules_text = " القوانين" + NL + NL + (NL + NL).join(lines)
     except Exception:
         rules_text = ""
-        chunks = []
-    if chunks:
-        await call.message.edit_text(chunks[0], reply_markup=back("back_to_menu"))
-        for chunk in chunks[1:]:
-            await call.message.answer(chunk, reply_markup=back("back_to_menu"))
+    if not rules_text:
+        rules_text = EnvKeys.RULES
+    if rules_text:
+        if len(rules_text) > 4000:
+            rules_text = rules_text[:3990] + "..."
+        await call.message.edit_text(rules_text, reply_markup=back("back_to_menu"))
     else:
-        if not rules_text:
-            rules_text = EnvKeys.RULES
-        if rules_text:
-            if len(rules_text) > 4000:
-                rules_text = rules_text[:3990] + "..."
-            await call.message.edit_text(rules_text, reply_markup=back("back_to_menu"))
-        else:
-            await call.answer(localize("rules.not_set"))
+        await call.answer(localize("rules.not_set"))
     await state.clear()
 
 
@@ -632,24 +628,36 @@ def _build_check_welcome_text(first_name: str = "") -> str:
     only, so pasting never strips them.
     """
     name = (first_name or "").strip() or "عزيزي"
+    name_en = (first_name or "").strip()
+    greeting_en = f"Welcome, {name_en}!" if name_en else "Welcome!"
     lines = [
-        "\U0001F1FE\U0001F1EA <b>منصة اليمن الإلكترونية</b> \U0001F6D2",
+        "\U0001F1FE\U0001F1EA <b>منصة اليمن الإلكترونية | Yemen Platform</b> \U0001F6D2",
         f"أهلاً بك، {name}! \U0001F44B",
+        f"{greeting_en} \U0001F44B",
         "",
-        "وجهتك الأولى للاشتراكات الرقمية والذكاء الاصطناعي في اليمن \u26A1",
+        "وجهتك الأولى للاشتراكات الرقمية والذكاء الاصطناعي في اليمن والعالم \u26A1",
+        "Your first destination for digital subscriptions and AI, in Yemen and worldwide \u26A1",
         "",
-        "\u2728 <b>خدماتنا المميزة:</b>",
+        "\u2728 <b>خدماتنا المميزة | Our featured services:</b>",
         "\U0001F916 اشتراكات الذكاء الاصطناعي (ChatGPT Plus \u2022 Gemini وغيرها)",
+        "\U0001F916 AI subscriptions (ChatGPT Plus \u2022 Gemini and more)",
         "\U0001F3A8 أدوات التصميم والمونتاج (Canva Pro وغيرها)",
+        "\U0001F3A8 Design and editing tools (Canva Pro and more)",
         "\U0001F3AC باقات وحسابات رقمية متنوعة بأسعار مخفضة",
+        "\U0001F3AC Various digital plans and accounts at discounted prices",
         "",
-        "\U0001F4B3 <b>طرق الدفع المحلية المباشرة:</b>",
+        "\U0001F4B3 <b>طرق الدفع | Payment methods:</b>",
         "\U0001F3E6 بنك الكريمي (ريال يمني YER \u2022 سعودي SAR \u2022 دولار USD)",
+        "\U0001F3E6 Kuraimi Bank (Yemeni riyal YER \u2022 Saudi riyal SAR \u2022 US dollar USD)",
         "\U0001F4F1 المحافظ الإلكترونية: محفظة جيب | موبايل موني",
+        "\U0001F4F1 E-wallets: Jeeb wallet | Mobile Money",
+        "\U0001F4B0 بينانس والعملات الرقمية | Binance and cryptocurrency",
         "",
         "\U0001F680 تفعيل سريع | \U0001F91D مصداقية وأمان | \U0001F4AC دعم فني متواصل",
+        "\U0001F680 Fast activation | \U0001F91D Trust and security | \U0001F4AC Ongoing technical support",
         "",
         "\U0001F447 اضغط زر <b>\u00ABالدخول إلى الاشتراكات\u00BB</b> بالأسفل، واختر اشتراكك وادفع بإحدى الطرق أعلاه.",
+        "\U0001F447 Tap the <b>\u00ABEnter subscriptions\u00BB</b> button below, choose your subscription and pay with one of the methods above.",
     ]
     return NL.join(lines)
 

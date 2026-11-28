@@ -157,7 +157,6 @@ def language_menu() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="🇬🇧 English", callback_data="set_lang:en"),
     )
     kb.row(
-        InlineKeyboardButton(text="🇷🇺 Русский", callback_data="set_lang:ru"),
         InlineKeyboardButton(text=localize("btn.back"), callback_data="back_to_menu"),
     )
     return kb.as_markup()
@@ -473,11 +472,17 @@ def check_sub(channel_username: str) -> InlineKeyboardMarkup:
     """
     checks the channel subscription.
     Gate buttons are fixed Arabic with the green (success) style.
+    The language button is the one bilingual button (the user has not
+    chosen a language yet) and is blue (primary) so it reads as a
+    setting, not a gate action.
     """
     kb = InlineKeyboardBuilder()
     kb.row(
         InlineKeyboardButton(text="\u2139\ufe0f قناة الأخبار", url=f"https://t.me/{channel_username}", style="success"),
         InlineKeyboardButton(text="\U0001F504 التحقق من الاشتراك", callback_data="sub_channel_done", style="success"),
+    )
+    kb.row(
+        InlineKeyboardButton(text="\U0001F310 اللغة | Language", callback_data="choose_language", style="primary"),
     )
     return kb.as_markup()
 
