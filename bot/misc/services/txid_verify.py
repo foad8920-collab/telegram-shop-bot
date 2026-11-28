@@ -287,3 +287,45 @@ async def verify_tron_usdt_txid(txid: str, expected_usd: Decimal):
         return False, None, "not_configured"
     verifier = TronUsdtVerifier(wallet)
     return await verifier.verify(txid, expected_usd)
+
+
+def copyable_account_value(method_name: str, account_info: str) -> str | None:
+    """The single value the user must copy (Binance Pay ID / TRC20 address).
+
+    Binance: the digits on the "Pay ID:" line. TRC20: the 34-char address
+    line starting with "T". Anything else returns None, and the caller keeps
+    the whole account_info in one code block.
+    """
+    kind = classify_txid_method(method_name or "")
+    if kind == "binance_pay":
+        for line in (account_info or "").splitlines():
+            s = line.strip()
+            if s.lower().startswith("pay id"):
+                value = s.split(":", 1)[-1].strip()
+                return value or None
+        return None
+    if kind == "tron_usdt":
+        for line in (account_info or "").splitlines():
+            s = line.strip()
+            if len(s) == 34 and s.startswith("T"):
+                return s
+        return None
+    return None
+
+
+def account_info_rest_lines(account_info: str, value: str | None) -> list[str]:
+    """account_info lines excluding the line holding the copyable value."""
+    if not value:
+        return (account_info or "").splitlines()
+    return [ln for ln in (account_info or "").splitlines() if value not in ln]
+
+
+def payment_method_order_key(method) -> tuple:
+    """Sort key for the payment-method list: Binance first, crypto second,
+    everything else by id (so the Yemeni wallets keep their order)."""
+    kind = classify_txid_method(getattr(method, "name", "") or "")
+    if kind == "binance_pay":
+        return (0, getattr(method, "id", 0))
+    if kind == "tron_usdt":
+        return (1, getattr(method, "id", 0))
+    return (2, getattr(method, "id", 0))

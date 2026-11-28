@@ -20,7 +20,7 @@ from bot.misc import EnvKeys, ItemPurchaseRequest, validate_telegram_id, validat
 from bot.handlers.other import _any_payment_method_enabled, is_safe_item_name, caller_name
 from bot.misc.metrics import get_metrics
 from bot.misc.services import CryptoPayAPI, CryptoPayAPIError, send_stars_invoice, send_fiat_invoice, StackVaultClient, StackVaultAPIError
-from bot.misc.services.txid_verify import classify_txid_method, validate_txid_format, verify_binance_pay_txid, verify_tron_usdt_txid
+from bot.misc.services.txid_verify import classify_txid_method, validate_txid_format, verify_binance_pay_txid, verify_tron_usdt_txid, copyable_account_value, account_info_rest_lines, payment_method_order_key
 from bot.misc.services.payment import _minor_units_for, payload_amount
 from bot.filters import ValidAmountFilter
 from bot.i18n import localize, esc
@@ -781,6 +781,7 @@ async def pay_manual_start(call: CallbackQuery, state: FSMContext):
         methods = (await session.execute(
             select(PaymentMethod).where(PaymentMethod.is_active == True)
         )).scalars().all()
+    methods = sorted(methods, key=payment_method_order_key)
 
     if not methods:
         await call.message.edit_text(
@@ -839,12 +840,19 @@ async def pay_manual_show_account(call: CallbackQuery, state: FSMContext):
     else:
         _instruction = " قم بتحويل المبلغ، ثم أرسل <b>صورة سند الحوالة</b> هنا."
 
+    _copy_value = copyable_account_value(pm.name, pm.account_info)
+    if _copy_value:
+        _rest = account_info_rest_lines(pm.account_info, _copy_value)
+        _account_block = f"<code>{_copy_value}</code>" + ("\n" + "\n".join(_rest) if _rest else "")
+    else:
+        _account_block = f"<code>{pm.account_info}</code>"
+
     _entered_txt, _usd_txt = _topup_display(data)
     await call.message.edit_text(
         f" <b>{pm.name}</b>\n\n"
         f" المبلغ: <b>{_entered_txt}</b>\n\n"
         f" <b>رقم الحساب / التعليمات:</b>\n"
-        f"<code>{pm.account_info}</code>\n\n"
+        f"{_account_block}\n\n"
         f" {_instruction}",
         parse_mode="HTML"
     )

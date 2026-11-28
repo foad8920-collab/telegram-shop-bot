@@ -12,13 +12,15 @@ from aiogram.types import (
 from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from bot.database.main import Database
 from bot.database.models.main import (
     SupplierProduct, Supplier, PaymentMethod,
-    SupplierOrder, User,
+    SupplierOrder, User, VerifiedTransaction,
 )
 from bot.states import SupplierBuy
+from bot.misc.services.txid_verify import classify_txid_method, validate_txid_format, verify_binance_pay_txid, verify_tron_usdt_txid, copyable_account_value, account_info_rest_lines, payment_method_order_key, TxVerifyError
 from bot.misc import EnvKeys
 from bot.database.methods.transactions import format_price_arabic_async
 
@@ -253,6 +255,7 @@ async def supplier_buy_qty_selected(call: CallbackQuery, state: FSMContext) -> N
             select(PaymentMethod).where(PaymentMethod.is_active == True).order_by(PaymentMethod.id)  # noqa: E712
         )
         methods = list(r.scalars().all())
+        methods = sorted(methods, key=payment_method_order_key)
 
     await state.set_state(SupplierBuy.choosing_payment)
 
@@ -362,6 +365,7 @@ async def supplier_buy_qty_manual_receive(message: Message, state: FSMContext) -
             select(PaymentMethod).where(PaymentMethod.is_active == True).order_by(PaymentMethod.id)  # noqa: E712
         )
         methods = list(r.scalars().all())
+        methods = sorted(methods, key=payment_method_order_key)
 
     product_name = data.get("sb_product_name", "-")
     insufficient = balance < total
@@ -589,6 +593,28 @@ async def supplier_buy_wallet(call: CallbackQuery, state: FSMContext) -> None:
     supplier_id = int(data.get("sb_supplier_id", 0))
     await state.update_data(sb_payment_method_id=pm.id, sb_payment_method_name=pm.name)
     await state.set_state(SupplierBuy.waiting_wallet_proof)
+    _txid_kind = classify_txid_method(pm.name or "")
+    _copy_value = copyable_account_value(pm.name, pm.account_info)
+    _account_lines = []
+    if _copy_value:
+        _account_lines.append(f"<code>{_copy_value}</code>")
+        _account_lines.extend(account_info_rest_lines(pm.account_info, _copy_value))
+    else:
+        _account_lines.append(f"<code>{pm.account_info}</code>")
+    if _txid_kind:
+        _steps = [
+            "1) حوّل المبلغ للحساب اعلاه.",
+            "2) أرسل <b>ايدي العملية (TxID)</b> هنا — انسخه من تطبيق بينانس/محفظتك.",
+            "",
+            " <i>أرسل الايدي فقط بدون أي نص إضافي. سيتم التحقق تلقائيا.</i>",
+        ]
+    else:
+        _steps = [
+            "1) حوّل المبلغ للحساب اعلاه.",
+            "2) ارسل <b>صورة سند الحوالة</b> هنا.",
+            "",
+            "سيتم التحقق بواسطة الادارة.",
+        ]
 
     text = NL.join([
         f"<b>{pm.name}</b>",
@@ -596,13 +622,10 @@ async def supplier_buy_wallet(call: CallbackQuery, state: FSMContext) -> None:
         f"المبلغ المطلوب: <b>{_fmt(total)}</b>",
         "",
         "<b>بيانات الحساب:</b>",
-        f"<code>{pm.account_info}</code>",
+        *_account_lines,
         "",
         "====================",
-        "1) حوّل المبلغ للحساب اعلاه.",
-        "2) ارسل <b>صورة سند الحوالة</b> هنا.",
-        "",
-        "سيتم التحقق بواسطة الادارة.",
+        *_steps,
     ])
 
     try:
@@ -755,6 +778,200 @@ async def supplier_wallet_proof_handler(message: Message, state: FSMContext) -> 
     )
     await state.clear()
 
+
+@router.message(SupplierBuy.waiting_wallet_proof, F.text)
+async def supplier_txid_handler(message: Message, state: FSMContext) -> None:
+    """Verify a Binance Pay / USDT TRC20 TxID and create the supplier order."""
+    raw = (message.text or "").strip()
+    if raw.startswith("/"):
+        return
+    data = await state.get_data()
+    supplier_id = data.get("sb_supplier_id")
+    product_id = data.get("sb_product_id")
+    qty = data.get("sb_qty")
+    payment_method_id = data.get("sb_payment_method_id")
+    payment_method_name = data.get("sb_payment_method_name") or "-"
+    if not supplier_id or not product_id or not qty or not payment_method_id:
+        await message.answer(" انتهت الجلسة. أعد العملية من البداية.")
+        await state.clear()
+        return
+    kind = classify_txid_method(payment_method_name or "")
+    if kind is None:
+        await message.answer(" الرجاء إرسال <b>صورة سند الحوالة</b> (وليس نصا).", parse_mode="HTML")
+        return
+    txid, hint = validate_txid_format(raw, kind)
+    if txid is None:
+        await message.answer(
+            f" رقم العملية غير صحيح. {hint}\n\nأرسل الايدي فقط بدون أي نص إضافي.",
+            parse_mode="HTML",
+        )
+        return
+    unit_price = Decimal(str(data.get("sb_unit_price", "0")))
+    total = (unit_price * int(qty)).quantize(Decimal("0.01"))
+    try:
+        async with Database().session() as session:
+            await session.run_sync(
+                lambda sync_session: VerifiedTransaction.__table__.create(sync_session.bind, checkfirst=True)
+            )
+            exists = (await session.execute(
+                select(VerifiedTransaction.id).where(VerifiedTransaction.txid == txid)
+            )).scalar_one_or_none()
+            if exists is not None:
+                await message.answer(" هذا الايدي مستخدم من قبل. تأكد من الرقم أو أرسل ايدي عملية جديدة.")
+                return
+    except Exception as e:
+        logger.exception("TxID table check failed: %s", e)
+        await message.answer(" حدث خطأ. حاول لاحقاً.")
+        return
+    try:
+        if kind == "binance_pay":
+            ok, received, reason = await verify_binance_pay_txid(txid, total)
+        else:
+            ok, received, reason = await verify_tron_usdt_txid(txid, total)
+    except TxVerifyError as e:
+        await message.answer(f" تعذر التحقق الآن: {e}\n\nحاول لاحقاً أو أرسل صورة السند للمشرف.")
+        return
+    if not ok:
+        reasons = {
+            "not_found": " لم نجد هذه العملية. تأكد من الرقم وأنه لنفس المبلغ.",
+            "wrong_receiver": " هذه العملية لم تصل إلى حسابنا. تأكد من رقم الحساب.",
+            "amount_low": " المبلغ المحوّل أقل من المطلوب.",
+            "wrong_type": " هذه العملية ليست تحويلا مباشرا.",
+            "tx_failed": " هذه العملية فاشلة على الشبكة.",
+            "not_configured": " التحقق التلقائي غير مهيأ بعد. أرسل صورة السند وسيؤكدها المشرف.",
+        }
+        await message.answer(
+            (reasons.get(reason) or " تعذر التحقق من العملية.")
+            + "\n\nأرسل ايدي عملية أخرى أو صورة السند.",
+            parse_mode="HTML",
+        )
+        return
+    try:
+        async with Database().session() as session:
+            session.add(VerifiedTransaction(
+                txid=txid, method=kind, user_id=message.from_user.id,
+                amount_usd=Decimal(str(received)).quantize(Decimal("0.01")),
+                used_for="supplier_buy",
+            ))
+            await session.commit()
+    except IntegrityError:
+        await message.answer(" هذا الايدي مستخدم من قبل. تأكد من الرقم أو أرسل ايدي عملية جديدة.")
+        return
+    except Exception as e:
+        logger.exception("TxID record failed: %s", e)
+        await message.answer(" حدث خطأ. حاول لاحقاً.")
+        return
+    user_id = message.from_user.id
+    try:
+        async with Database().session() as session:
+            product = await session.get(SupplierProduct, int(product_id))
+            if product is None or int(product.supplier_id) != int(supplier_id):
+                await message.answer(" بيانات غير صحيحة.")
+                await state.clear()
+                return
+            supplier = await session.get(Supplier, int(supplier_id))
+            unit_price = Decimal(str(product.selling_price or 0)).quantize(Decimal("0.01"))
+            total = (unit_price * int(qty)).quantize(Decimal("0.01"))
+            order = SupplierOrder(
+                supplier_id=int(supplier_id),
+                user_id=user_id,
+                product_id=int(product_id),
+                quantity=int(qty),
+                cost_price=product.cost_price,
+                selling_price=unit_price,
+                profit=(unit_price - Decimal(str(product.cost_price or 0))) * int(qty),
+                status="pending",
+                response_data={
+                    "payment_method": "txid",
+                    "payment_method_id": int(payment_method_id),
+                    "payment_method_name": str(payment_method_name),
+                    "txid": txid,
+                    "verified_amount": str(received),
+                    "total": str(total),
+                },
+            )
+            session.add(order)
+            await session.commit()
+            await session.refresh(order)
+            order_id = order.id
+            product_name = str(product.name)
+            product_external_id = str(getattr(product, "external_id", "") or "")
+            product_in_local = bool(getattr(product, "show_in_local", False))
+            supplier_name = (supplier.display_name or supplier.name) if supplier else "-"
+            supplier_internal_name = supplier.name if supplier else "-"
+            supplier_icon = supplier.icon_emoji if supplier else ""
+    except Exception as e:
+        logger.exception("Failed to create supplier TxID order: %s", e)
+        await message.answer(" تم التحقق من العملية، لكن حدث خطأ أثناء إنشاء الطلب. تواصل مع المشرف (رقم العملية محفوظ).")
+        await state.clear()
+        return
+    if product_in_local:
+        supplier_note = "<b>ملاحظة: هذا المنتج منقول الى الاشتراكات المحلية لذلك لن يظهر في قسم الموردين في البوت. اشتره من بوت المورد في تيليجرام كمستخدم عادي ثم ارسل الاشتراك للعميل من هنا.</b>"
+    else:
+        supplier_note = "<b>اشتر المنتج من بوت المورد في تيليجرام كمستخدم عادي ثم ارسل الاشتراك للعميل من هنا.</b>"
+    admin_text = NL.join([
+        f"{supplier_icon} <b>طلب شراء جديد من {supplier_name}</b>",
+        "====================",
+        f"رقم الطلب: <code>#{order_id}</code>",
+        f"العميل: <code>{user_id}</code>",
+        f"المنتج: <b>{product_name}</b>",
+        f"المورد: <b>{supplier_name}</b>",
+        f"اسم المورد الداخلي: <b>{supplier_internal_name}</b> (ID: {supplier_id})",
+        f"المعرف الخارجي: <code>{product_external_id or '-'}</code>",
+        f"الكمية: <b>{qty}</b>",
+        f"الاجمالي: <b>{_fmt(total)}</b>",
+        f"طريقة الدفع: <b>{payment_method_name}</b> (تحقق تلقائي - TxID: <code>{txid}</code>)",
+        "====================",
+        supplier_note,
+    ])
+    SUPPLIER_TELEGRAM_BOTS = {1: "stackvault_bot", 2: "Pandora_Digital_bot", 6: "storeBatmanBot"}
+    supplier_telegram_bot = SUPPLIER_TELEGRAM_BOTS.get(int(supplier_id), "")
+    admin_kb_rows: list[list[InlineKeyboardButton]] = []
+    if supplier_telegram_bot:
+        admin_kb_rows.append([InlineKeyboardButton(text=f"فتح بوت {supplier_internal_name} في تيليجرام", url=f"https://t.me/{supplier_telegram_bot}", style="primary")])
+    admin_kb_rows.append([
+        InlineKeyboardButton(
+            text=chr(0x1F4E4) + " إرسال الاشتراك للعميل",
+            callback_data=f"sb_send_content:{order_id}",
+            style="success",
+        ),
+    ])
+    admin_kb_rows.append([
+        InlineKeyboardButton(
+            text=chr(0x274C) + " رفض الطلب",
+            callback_data=f"sb_reject:{order_id}",
+            style="danger",
+        ),
+    ])
+    admin_markup = InlineKeyboardMarkup(inline_keyboard=admin_kb_rows)
+    bot: Bot = message.bot
+    for admin_id in _get_admin_ids():
+        try:
+            await bot.send_message(
+                chat_id=admin_id,
+                text=admin_text,
+                parse_mode="HTML",
+                reply_markup=admin_markup,
+            )
+        except Exception as e:
+            logger.warning("Failed to notify admin %s: %s", admin_id, e)
+    await message.answer(
+        NL.join([
+            " <b>تم التحقق من العملية وإرسال طلبك بنجاح!</b>",
+            "",
+            f" المنتج: <b>{product_name}</b>",
+            f" الكمية: <b>{qty}</b>",
+            f" الاجمالي: <b>{_fmt(total)}</b>",
+            f" رقم الطلب: <code>#{order_id}</code>",
+            "",
+            " <i>تم تأكيد الدفع تلقائيا. سيتم ارسال تفاصيل المنتج اليك قريبا.</i>",
+        ]),
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=" رجوع للمتجر", callback_data="shop", style="primary")],
+        ]),
+    )
+    await state.clear()
 
 @router.message(SupplierBuy.waiting_wallet_proof)
 async def supplier_wallet_proof_wrong_type(message: Message, state: FSMContext) -> None:

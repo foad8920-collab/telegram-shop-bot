@@ -15,18 +15,20 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from aiogram import Router, F
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest
 from sqlalchemy import select, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import noload
 
 from bot.database.main import Database
 from bot.database.models.main import (
     LocalSubscription, PaymentMethod, User,
-    LocalSubscriptionOrder, LocalSubscriptionCode,
+    LocalSubscriptionOrder, LocalSubscriptionCode, VerifiedTransaction,
 )
 from bot.states import LocalBuy
+from bot.misc.services.txid_verify import classify_txid_method, validate_txid_format, verify_binance_pay_txid, verify_tron_usdt_txid, copyable_account_value, account_info_rest_lines, payment_method_order_key, TxVerifyError
 from bot.misc.services.updates_channel import send_purchase_post
 
 
@@ -220,6 +222,7 @@ async def quantity_selected(call: CallbackQuery, state: FSMContext) -> None:
             select(PaymentMethod).where(PaymentMethod.is_active == True).order_by(PaymentMethod.id)
         )
         methods = result.scalars().all()
+        methods = sorted(methods, key=payment_method_order_key)
     await state.set_state(LocalBuy.choosing_payment)
     sub_name = data.get("sub_name", "")
     insufficient = balance < total
@@ -542,30 +545,39 @@ async def payment_method_handler(call: CallbackQuery, state: FSMContext) -> None
             await call.answer("طريقة الدفع هذه لم تعد متاحة.", show_alert=True)
             return
 
-    method_name_lower = (pm.name or "").lower()
-    is_binance = ("بايننس" in pm.name) or ("binance" in method_name_lower) or (pm.id == 1)
+    _txid_kind = classify_txid_method(pm.name or "")
+    if _txid_kind is None and pm.id == 1:
+        _txid_kind = "binance_pay"
+    is_verifiable = _txid_kind is not None
 
     await state.update_data(payment_method_id=pm.id, payment_method_name=pm.name)
 
     total = Decimal(str(data.get("total_price", "0"))).quantize(Decimal("0.01"))
 
-    if is_binance:
-        # الطريقة الآلية: نطلب كود/رقم عملية بايننس
+    if is_verifiable:
+        # الطريقة الآلية: التحقق من ايدي العملية (TxID) عبر API
         await state.set_state(LocalBuy.waiting_binance_code)
-
+        _copy_value = copyable_account_value(pm.name, pm.account_info)
+        _account_lines = []
+        if _copy_value:
+            _account_lines.append(f"<code>{_copy_value}</code>")
+            _account_lines.extend(account_info_rest_lines(pm.account_info, _copy_value))
+        else:
+            _account_lines.append(f"<code>{pm.account_info}</code>")
+        _hint = "ايدي عملية بينانس يبدأ بـ M_P_." if _txid_kind == "binance_pay" else "ايدي عملية ترون مكوّن من 64 حرفا ورقما."
         text = NL.join([
-            " <b>الدفع عبر Binance</b>",
+            f" <b>الدفع عبر {pm.name}</b>",
             "",
             f" المبلغ المطلوب: <b>{_fmt(total)}</b>",
             "",
             " <b>بيانات الحساب:</b>",
-            f"<code>{pm.account_info}</code>",
+            *_account_lines,
             "",
             "",
             " حوّل المبلغ إلى الحساب أعلاه.",
-            " ثم انسخ <b>رقم عملية التحويل (Reference/Order ID)</b> والصقه هنا.",
+            " ثم أرسل <b>ايدي العملية (TxID)</b> هنا — انسخه من تطبيق بينانس/محفظتك.",
             "",
-            " <i>أرسل الرقم فقط بدون أي نص إضافي.</i>",
+            f" <i>{_hint} أرسل الايدي فقط بدون أي نص إضافي.</i>",
         ])
         markup = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=" إلغاء", callback_data=f"local_sub:{sub_id}", style="danger")],
@@ -594,6 +606,304 @@ async def payment_method_handler(call: CallbackQuery, state: FSMContext) -> None
         [InlineKeyboardButton(text=" إلغاء", callback_data=f"local_sub:{sub_id}", style="danger")],
     ])
     await call.message.edit_text(text, parse_mode="HTML", reply_markup=markup)
+
+@router.message(LocalBuy.waiting_binance_code, F.text)
+async def binance_code_receive(message: Message, state: FSMContext) -> None:
+    """Verify a Binance Pay / USDT TRC20 TxID and complete the local purchase."""
+    raw = (message.text or "").strip()
+    if raw.startswith("/"):
+        return
+    data = await state.get_data()
+    sub_id = data.get("sub_id")
+    qty = data.get("qty")
+    total = data.get("total_price")
+    pm_id = data.get("payment_method_id")
+    pm_name = data.get("payment_method_name", "")
+    if not sub_id or not qty or not total or not pm_id:
+        await message.answer(" انتهت الجلسة. أعد العملية من البداية.")
+        await state.clear()
+        return
+    qty = int(qty)
+    sub_id = int(sub_id)
+    pm_id = int(pm_id)
+    kind = classify_txid_method(pm_name or "")
+    if kind is None and pm_id == 1:
+        kind = "binance_pay"
+    if kind is None:
+        await message.answer(" هذه الطريقة لا تدعم التحقق التلقائي. أرسل صورة السند.")
+        return
+    txid, hint = validate_txid_format(raw, kind)
+    if txid is None:
+        await message.answer(
+            f" رقم العملية غير صحيح. {hint}\n\nأرسل الايدي فقط بدون أي نص إضافي.",
+            parse_mode="HTML",
+        )
+        return
+    total_dec = Decimal(str(total)).quantize(Decimal("0.01"))
+    unit_price = Decimal(str(data.get("sub_price", "0")))
+    user_id = message.from_user.id
+    try:
+        async with Database().session() as session:
+            await session.run_sync(
+                lambda sync_session: VerifiedTransaction.__table__.create(sync_session.bind, checkfirst=True)
+            )
+            exists = (await session.execute(
+                select(VerifiedTransaction.id).where(VerifiedTransaction.txid == txid)
+            )).scalar_one_or_none()
+            if exists is not None:
+                await message.answer(" هذا الايدي مستخدم من قبل. تأكد من الرقم أو أرسل ايدي عملية جديدة.")
+                return
+    except Exception as e:
+        logger.exception("TxID table check failed: %s", e)
+        await message.answer(" حدث خطأ. حاول لاحقاً.")
+        return
+    try:
+        if kind == "binance_pay":
+            ok, received, reason = await verify_binance_pay_txid(txid, total_dec)
+        else:
+            ok, received, reason = await verify_tron_usdt_txid(txid, total_dec)
+    except TxVerifyError as e:
+        await message.answer(f" تعذر التحقق الآن: {e}\n\nحاول لاحقاً أو أرسل صورة السند للمشرف.")
+        return
+    if not ok:
+        reasons = {
+            "not_found": " لم نجد هذه العملية. تأكد من الرقم وأنه لنفس المبلغ.",
+            "wrong_receiver": " هذه العملية لم تصل إلى حسابنا. تأكد من رقم الحساب.",
+            "amount_low": " المبلغ المحوّل أقل من المطلوب.",
+            "wrong_type": " هذه العملية ليست تحويلا مباشرا.",
+            "tx_failed": " هذه العملية فاشلة على الشبكة.",
+            "not_configured": " التحقق التلقائي غير مهيأ بعد. أرسل صورة السند وسيؤكدها المشرف.",
+        }
+        await message.answer(
+            (reasons.get(reason) or " تعذر التحقق من العملية.")
+            + "\n\nأرسل ايدي عملية أخرى أو صورة السند.",
+            parse_mode="HTML",
+        )
+        return
+    try:
+        async with Database().session() as session:
+            session.add(VerifiedTransaction(
+                txid=txid, method=kind, user_id=user_id,
+                amount_usd=Decimal(str(received)).quantize(Decimal("0.01")),
+                used_for="local_buy",
+            ))
+            await session.commit()
+    except IntegrityError:
+        await message.answer(" هذا الايدي مستخدم من قبل. تأكد من الرقم أو أرسل ايدي عملية جديدة.")
+        return
+    except Exception as e:
+        logger.exception("TxID record failed: %s", e)
+        await message.answer(" حدث خطأ. حاول لاحقاً.")
+        return
+    payment_type = "binance" if kind == "binance_pay" else "crypto"
+    try:
+        async with Database().session() as session:
+            user = (await session.execute(
+                select(User).where(User.telegram_id == user_id).with_for_update()
+            )).scalar_one_or_none()
+            if user is None:
+                await message.answer("تعذّر العثور على حسابك.")
+                await state.clear()
+                return
+            sub = (await session.execute(
+                select(LocalSubscription).where(LocalSubscription.id == sub_id).with_for_update()
+            )).scalar_one_or_none()
+            if sub is None or not sub.is_active:
+                await message.answer("هذا الاشتراك لم يعد متوفرًا.")
+                await state.clear()
+                return
+            codes_per_purchase = int(sub.codes_per_purchase or 1)
+            if codes_per_purchase < 1:
+                codes_per_purchase = 1
+            delivery_type = (sub.delivery_type or "codes").lower()
+            required_codes = 0
+            order_status = "completed"
+            if delivery_type == "codes":
+                required_codes = qty * codes_per_purchase
+                free_count = (await session.execute(
+                    select(func.count()).select_from(LocalSubscriptionCode).where(
+                        LocalSubscriptionCode.subscription_id == sub_id,
+                        LocalSubscriptionCode.is_used == False,
+                    )
+                )).scalar() or 0
+                if int(free_count) < required_codes:
+                    order_status = "pending"
+            else:
+                if int(sub.quantity or 0) < qty:
+                    order_status = "pending"
+            codes = []
+            if order_status == "completed" and required_codes > 0:
+                result = await session.execute(
+                    select(LocalSubscriptionCode)
+                    .where(
+                        LocalSubscriptionCode.subscription_id == sub_id,
+                        LocalSubscriptionCode.is_used == False,
+                    )
+                    .options(noload(LocalSubscriptionCode.subscription))
+                    .order_by(LocalSubscriptionCode.id)
+                    .limit(required_codes)
+                    .with_for_update()
+                )
+                codes = list(result.scalars().all())
+                if len(codes) < required_codes:
+                    order_status = "pending"
+                    codes = []
+            if order_status == "completed" and delivery_type != "codes":
+                sub.quantity = int(sub.quantity or 0) - qty
+            order = LocalSubscriptionOrder(
+                user_id=user_id, subscription_id=sub_id, quantity=qty,
+                unit_price=unit_price, total_price=total_dec,
+                payment_method_id=pm_id, payment_type=payment_type,
+                payment_reference=txid, status=order_status,
+                decided_at=datetime.now(timezone.utc),
+            )
+            session.add(order)
+            await session.flush()
+            for code in codes:
+                code.is_used = True
+                code.used_by = user_id
+                code.order_id = order.id
+                code.used_at = datetime.now(timezone.utc)
+            if codes:
+                content = NL.join(f" {c.content}" for c in codes)
+                order.delivered_content = content
+            await session.commit()
+            order_id = order.id
+            codes_content = [c.content for c in codes]
+            sub_name = str(sub.name)
+            if codes_content:
+                try:
+                    await send_purchase_post(message.bot, sub_name, qty, _fmt(total_dec), pm_name, user_id, order_id)
+                except Exception as _e:
+                    logger.warning("Failed to post purchase: %s", _e)
+    except Exception as e:
+        logger.exception("TxID purchase completion failed: %s", e)
+        await message.answer(" تم التحقق من العملية، لكن حدث خطأ أثناء إتمام الشراء. تواصل مع المشرف (رقم العملية محفوظ).")
+        await state.clear()
+        return
+    await state.clear()
+    if order_status == "pending":
+        await message.answer(
+            NL.join([
+                " <b>تم التحقق من العملية بنجاح!</b>",
+                "",
+                f" المنتج: <b>{sub_name}</b>",
+                f" الكمية: <b>{qty}</b>",
+                f" الإجمالي: <b>{_fmt(total_dec)}</b>",
+                f" رقم الطلب: <code>#{order_id}</code>",
+                "",
+                " <i>المنتج غير متوفر حاليا — تم تسجيل طلبك وسيتواصل معك المشرف.</i>",
+            ]),
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=" رجوع للمتجر", callback_data="shop", style="primary")],
+            ]),
+        )
+        return
+    if codes_content:
+        lines = [
+            " <b>تم إتمام الشراء بنجاح!</b>",
+            "",
+            f" المنتج: <b>{sub_name}</b>",
+            f" الكمية: <b>{qty}</b>",
+            f" الإجمالي: <b>{_fmt(total_dec)}</b>",
+            f" رقم الطلب: <code>#{order_id}</code>",
+            "",
+            " <b>الأكواد / المفاتيح الخاصة بك:</b>",
+            "",
+        ]
+        for idx, c in enumerate(codes_content, 1):
+            lines.append(f"<b>{idx}.</b>")
+            for _line in str(c).splitlines():
+                _line = _line.strip()
+                if not _line:
+                    continue
+                if ": " in _line:
+                    _label, _value = _line.split(": ", 1)
+                    _value = _value.strip()
+                    if _value:
+                        lines.append(f"{html.escape(_label.strip(), quote=False)}: <code>{html.escape(_value, quote=False)}</code>")
+                    else:
+                        lines.append(f"<code>{html.escape(_line, quote=False)}</code>")
+                else:
+                    lines.append(f"<code>{html.escape(_line, quote=False)}</code>")
+        lines.append("")
+        lines.append(" <i>احتفظ بهذه الأكواد  لن تُعرض مرة أخرى.</i>")
+        await message.answer(
+            NL.join(lines), parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=" رجوع للمتجر", callback_data="shop", style="primary")],
+            ]),
+        )
+        return
+    invite_field = "email"
+    try:
+        async with Database().session() as _sess3:
+            _sub3 = (await _sess3.execute(
+                select(LocalSubscription).where(LocalSubscription.id == sub_id)
+            )).scalar_one_or_none()
+            if _sub3 is not None:
+                invite_field = (_sub3.invite_field_type or "email").lower()
+    except Exception as e:
+        logger.warning("Failed to reload sub in txid: %s", e)
+    if delivery_type == "invite" and invite_field != "none":
+        try:
+            async with Database().session() as _sess4:
+                _o4 = (await _sess4.execute(
+                    select(LocalSubscriptionOrder)
+                    .options(noload(LocalSubscriptionOrder.subscription))
+                    .where(LocalSubscriptionOrder.id == order_id)
+                )).scalar_one_or_none()
+                if _o4 is not None:
+                    _o4.awaiting_data = True
+                    _o4.awaiting_field_type = invite_field
+                    await _sess4.commit()
+        except Exception as e:
+            logger.warning("Failed to set awaiting_data: %s", e)
+        field_titles = {
+            "email": " البريد الإلكتروني",
+            "phone": " رقم الجوال",
+            "username": " اسم المستخدم",
+            "telegram_id": " معرّف تيليجرام",
+            "text": " النص المطلوب",
+        }
+        field_label = field_titles.get(invite_field, " البيانات المطلوبة")
+        prompt_text = NL.join([
+            " <b>تم إتمام الشراء بنجاح!</b>",
+            "",
+            f" المنتج: <b>{sub_name}</b>",
+            f" الكمية: <b>{qty}</b>",
+            f" الإجمالي: <b>{_fmt(total_dec)}</b>",
+            f" رقم الطلب: <code>#{order_id}</code>",
+            "",
+            f"{field_label}:",
+            "<i>مثال: user@gmail.com</i>",
+            "",
+            " <i>جاري تفعيل اشتراكك من قبل المشرف  يرجى الانتظار.</i>",
+        ])
+        await message.answer(
+            prompt_text, parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=" رجوع للمتجر", callback_data="shop", style="primary")],
+            ]),
+        )
+    else:
+        manual_text = NL.join([
+            " <b>تم إتمام الشراء بنجاح!</b>",
+            "",
+            f" المنتج: <b>{sub_name}</b>",
+            f" الكمية: <b>{qty}</b>",
+            f" الإجمالي: <b>{_fmt(total_dec)}</b>",
+            f" رقم الطلب: <code>#{order_id}</code>",
+            "",
+            " <i>جاري تفعيل اشتراكك من قبل المشرف  يرجى الانتظار.</i>",
+        ])
+        await message.answer(
+            manual_text, parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=" رجوع للمتجر", callback_data="shop", style="primary")],
+            ]),
+        )
 
 # ============================================================
 #  Manual quantity input
@@ -701,6 +1011,7 @@ async def quantity_manual_receive(message: Message, state: FSMContext) -> None:
             .order_by(PaymentMethod.id)
         )
         methods = result.scalars().all()
+        methods = sorted(methods, key=payment_method_order_key)
 
     balance = await _get_user_balance(message.from_user.id)
     sub_name = data.get("sub_name", "-")
