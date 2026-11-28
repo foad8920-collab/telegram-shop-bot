@@ -298,11 +298,19 @@ def copyable_account_value(method_name: str, account_info: str) -> str | None:
     """
     kind = classify_txid_method(method_name or "")
     if kind == "binance_pay":
-        for line in (account_info or "").splitlines():
+        lines = (account_info or "").splitlines()
+        for i, line in enumerate(lines):
             s = line.strip()
             if s.lower().startswith("pay id"):
                 value = s.split(":", 1)[-1].strip()
-                return value or None
+                if value:
+                    return value
+                # The number sits on the next non-empty line ("Pay ID:" alone).
+                for nxt in lines[i + 1:]:
+                    ns = nxt.strip()
+                    if ns:
+                        return ns
+                return None
         return None
     if kind == "tron_usdt":
         for line in (account_info or "").splitlines():
@@ -314,10 +322,35 @@ def copyable_account_value(method_name: str, account_info: str) -> str | None:
 
 
 def account_info_rest_lines(account_info: str, value: str | None) -> list[str]:
-    """account_info lines excluding the line holding the copyable value."""
+    """account_info lines excluding the copyable value, cleaned for display.
+
+    Drops the line holding the value (and a bare label line above it, such
+    as "Pay ID:" when the number was on the next line), drops blank lines,
+    and rejoins a "label:" line with the line after it ("الاسم:" +
+    "SubWorldStore" -> "الاسم: SubWorldStore").
+    """
     if not value:
         return (account_info or "").splitlines()
-    return [ln for ln in (account_info or "").splitlines() if value not in ln]
+    lines = (account_info or "").splitlines()
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        s = lines[i].strip()
+        if not s:
+            i += 1
+            continue
+        if value in s:
+            if out and out[-1].strip().endswith(":"):
+                out.pop()
+            i += 1
+            continue
+        if s.endswith(":") and i + 1 < len(lines) and lines[i + 1].strip() and value not in lines[i + 1]:
+            out.append(s + " " + lines[i + 1].strip())
+            i += 2
+            continue
+        out.append(lines[i])
+        i += 1
+    return out
 
 
 def payment_method_order_key(method) -> tuple:
