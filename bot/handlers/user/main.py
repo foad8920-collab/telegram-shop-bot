@@ -244,7 +244,8 @@ class SubscriptionGateMiddleware(BaseMiddleware):
         )
         if subscribed is True:
             return await handler(event, data)
-        set_current_locale("ar")
+        # The gate follows the user's chosen language (Arabic by
+        # default); it is no longer forced to Arabic.
         try:
             await event.answer(localize("subscribe.prompt"), show_alert=True)
         except Exception as e:
@@ -338,7 +339,6 @@ async def start(message: Message, state: FSMContext):
     if channel_username:
         subscribed = await _is_subscribed(message.bot, channel_username, user_id)
         if subscribed is not True:
-            set_current_locale("ar")
             await message.answer(localize("subscribe.prompt"), reply_markup=check_sub(channel_username))
             await _delete_quietly(message)
             return
@@ -684,7 +684,6 @@ async def check_sub_to_channel(call: CallbackQuery, state: FSMContext):
             await state.clear()
             return
 
-    set_current_locale("ar")
     await call.answer(localize("subscribe.prompt"), show_alert=True)
 
 

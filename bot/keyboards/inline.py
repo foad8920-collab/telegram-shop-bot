@@ -4,7 +4,7 @@ from sqlalchemy import select
 from typing import Callable, Iterable, Tuple
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from bot.i18n import localize
+from bot.i18n import localize, get_current_locale
 from bot.database.models import Permission
 from bot.misc import LazyPaginator # noqa: F401
 from bot.misc.services.stackvault_pricing import is_available
@@ -471,15 +471,21 @@ def question_buttons(question: str, back_data: str) -> InlineKeyboardMarkup:
 def check_sub(channel_username: str) -> InlineKeyboardMarkup:
     """
     checks the channel subscription.
-    Gate buttons are fixed Arabic with the green (success) style.
-    The language button is the one bilingual button (the user has not
-    chosen a language yet) and is blue (primary) so it reads as a
-    setting, not a gate action.
+    The two gate buttons follow the user's language (Arabic by
+    default, English after a language switch); the language button
+    is the one bilingual button and is blue (primary) so it reads
+    as a setting, not a gate action.
     """
+    if get_current_locale() == "en":
+        news_text = "\u2139\ufe0f News channel"
+        verify_text = "\U0001F504 Verify subscription"
+    else:
+        news_text = "\u2139\ufe0f قناة الأخبار"
+        verify_text = "\U0001F504 التحقق من الاشتراك"
     kb = InlineKeyboardBuilder()
     kb.row(
-        InlineKeyboardButton(text="\u2139\ufe0f قناة الأخبار", url=f"https://t.me/{channel_username}", style="success"),
-        InlineKeyboardButton(text="\U0001F504 التحقق من الاشتراك", callback_data="sub_channel_done", style="success"),
+        InlineKeyboardButton(text=news_text, url=f"https://t.me/{channel_username}", style="success"),
+        InlineKeyboardButton(text=verify_text, callback_data="sub_channel_done", style="success"),
     )
     kb.row(
         InlineKeyboardButton(text="\U0001F310 اللغة | Language", callback_data="choose_language", style="primary"),
