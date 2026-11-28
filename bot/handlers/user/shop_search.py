@@ -97,7 +97,7 @@ async def shop_search_start_handler(call: CallbackQuery, state: FSMContext) -> N
     ])
 
     markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=" رجوع", callback_data="shop", style="primary")],
+        [InlineKeyboardButton(text=(" Back" if get_current_locale() == "en" else " رجوع"), callback_data="shop", style="primary")],
     ])
 
     try:
@@ -181,8 +181,8 @@ async def shop_search_query_handler(message: Message, state: FSMContext) -> None
             " جرّب كلمة أخرى.",
         ])
         markup = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=" بحث جديد", callback_data="shop_search", style="primary")],
-            [InlineKeyboardButton(text=" رجوع", callback_data="shop", style="primary")],
+            [InlineKeyboardButton(text=(" New search" if get_current_locale() == "en" else " بحث جديد"), callback_data="shop_search", style="primary")],
+            [InlineKeyboardButton(text=(" Back" if get_current_locale() == "en" else " رجوع"), callback_data="shop", style="primary")],
         ])
         await message.answer(text, parse_mode="HTML", reply_markup=markup)
         return
@@ -211,8 +211,8 @@ async def shop_search_query_handler(message: Message, state: FSMContext) -> None
         )])
         rows.extend(_supplier_kb(prods, sid))
 
-    rows.append([InlineKeyboardButton(text=" بحث جديد", callback_data="shop_search", style="primary")])
-    rows.append([InlineKeyboardButton(text=" رجوع", callback_data="shop", style="primary")])
+    rows.append([InlineKeyboardButton(text=(" New search" if get_current_locale() == "en" else " بحث جديد"), callback_data="shop_search", style="primary")])
+    rows.append([InlineKeyboardButton(text=(" Back" if get_current_locale() == "en" else " رجوع"), callback_data="shop", style="primary")])
 
     text = NL.join([
         f" <b>البحث عن: {query}</b>",
@@ -255,7 +255,7 @@ async def local_search_start_handler(call: CallbackQuery, state: FSMContext) -> 
     ])
 
     markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=" رجوع", callback_data="shop_local", style="primary")],
+        [InlineKeyboardButton(text=(" Back" if get_current_locale() == "en" else " رجوع"), callback_data="shop_local", style="primary")],
     ])
 
     try:
@@ -321,15 +321,15 @@ async def _search_local_only(message: Message, query: str, query_lower: str) -> 
             ("No results in Featured Subscriptions." if get_current_locale() == "en" else " لا توجد نتائج في الاشتراكات المميزة."),
         ])
         markup = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=" بحث جديد", callback_data="local_search", style="primary")],
-            [InlineKeyboardButton(text=" رجوع", callback_data="shop_local", style="primary")],
+            [InlineKeyboardButton(text=(" New search" if get_current_locale() == "en" else " بحث جديد"), callback_data="local_search", style="primary")],
+            [InlineKeyboardButton(text=(" Back" if get_current_locale() == "en" else " رجوع"), callback_data="shop_local", style="primary")],
         ])
         await message.answer(text, parse_mode="HTML", reply_markup=markup)
         return
 
     rows = _local_kb(items)
-    rows.append([InlineKeyboardButton(text=" بحث جديد", callback_data="local_search", style="primary")])
-    rows.append([InlineKeyboardButton(text=" رجوع", callback_data="shop_local", style="primary")])
+    rows.append([InlineKeyboardButton(text=(" New search" if get_current_locale() == "en" else " بحث جديد"), callback_data="local_search", style="primary")])
+    rows.append([InlineKeyboardButton(text=(" Back" if get_current_locale() == "en" else " رجوع"), callback_data="shop_local", style="primary")])
 
     text = NL.join([
         f" <b>البحث عن: {query}</b>",
@@ -387,8 +387,8 @@ async def _search_all(message: Message, query: str, query_lower: str) -> None:
             " لا توجد نتائج.",
         ])
         markup = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=" بحث جديد", callback_data="shop_search", style="primary")],
-            [InlineKeyboardButton(text=" رجوع", callback_data="shop", style="primary")],
+            [InlineKeyboardButton(text=(" New search" if get_current_locale() == "en" else " بحث جديد"), callback_data="shop_search", style="primary")],
+            [InlineKeyboardButton(text=(" Back" if get_current_locale() == "en" else " رجوع"), callback_data="shop", style="primary")],
         ])
         await message.answer(text, parse_mode="HTML", reply_markup=markup)
         return
@@ -416,8 +416,8 @@ async def _search_all(message: Message, query: str, query_lower: str) -> None:
         )])
         rows.extend(_supplier_kb(prods, sid))
 
-    rows.append([InlineKeyboardButton(text=" بحث جديد", callback_data="shop_search", style="primary")])
-    rows.append([InlineKeyboardButton(text=" رجوع", callback_data="shop", style="primary")])
+    rows.append([InlineKeyboardButton(text=(" New search" if get_current_locale() == "en" else " بحث جديد"), callback_data="shop_search", style="primary")])
+    rows.append([InlineKeyboardButton(text=(" Back" if get_current_locale() == "en" else " رجوع"), callback_data="shop", style="primary")])
 
     text = NL.join([
         f" <b>البحث عن: {query}</b>",

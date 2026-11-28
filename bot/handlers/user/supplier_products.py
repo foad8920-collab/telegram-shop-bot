@@ -16,6 +16,7 @@ from bot.handlers.user.shop_and_goods import _shorten
 from bot.database.main import Database
 from bot.database.models.main import Supplier, SupplierProduct
 from bot.database.methods.transactions import format_price_arabic_async
+from bot.i18n import get_current_locale
 
 
 logger = logging.getLogger(__name__)
@@ -186,13 +187,13 @@ async def _build_categories_kb(
         # Previous
         if cat_page > 0:
             nav.append(InlineKeyboardButton(
-                text=" السابق",
+                text=(" Previous" if get_current_locale() == "en" else " السابق"),
                 callback_data=f"sv_cats_page:{supplier_id}:{cat_page - 1}:{uncat_page}",
                 style="primary",
             ))
         else:
             nav.append(InlineKeyboardButton(
-                text=" السابق",
+                text=(" Previous" if get_current_locale() == "en" else " السابق"),
                 callback_data="noop",
                 style="primary",
             ))
@@ -207,13 +208,13 @@ async def _build_categories_kb(
         # Next
         if cat_page < total_cat_pages - 1:
             nav.append(InlineKeyboardButton(
-                text="التالي ",
+                text=("Next " if get_current_locale() == "en" else "التالي "),
                 callback_data=f"sv_cats_page:{supplier_id}:{cat_page + 1}:{uncat_page}",
                 style="primary",
             ))
         else:
             nav.append(InlineKeyboardButton(
-                text="التالي ",
+                text=("Next " if get_current_locale() == "en" else "التالي "),
                 callback_data="noop",
                 style="primary",
             ))
@@ -249,7 +250,7 @@ async def _build_categories_kb(
         nav: list[InlineKeyboardButton] = []
         if uncat_page > 0:
             nav.append(InlineKeyboardButton(
-                text=" السابق",
+                text=(" Previous" if get_current_locale() == "en" else " السابق"),
                 callback_data=f"sv_uncat_page:{supplier_id}:{cat_page}:{uncat_page - 1}",
                 style="primary",
             ))
@@ -260,7 +261,7 @@ async def _build_categories_kb(
         ))
         if uncat_page < total_uncat_pages - 1:
             nav.append(InlineKeyboardButton(
-                text="التالي ",
+                text=("Next " if get_current_locale() == "en" else "التالي "),
                 callback_data=f"sv_uncat_page:{supplier_id}:{cat_page}:{uncat_page + 1}",
                 style="primary",
             ))
@@ -271,7 +272,7 @@ async def _build_categories_kb(
         callback_data=f"sv_search:{supplier_id}",
         style="primary",
     )])
-    rows.append([InlineKeyboardButton(text=" رجوع", callback_data="shop", style="primary")])
+    rows.append([InlineKeyboardButton(text=(" Back" if get_current_locale() == "en" else " رجوع"), callback_data="shop", style="primary")])
 
     # ---- Text ----
     icon = supplier.icon_emoji or ""
@@ -377,7 +378,7 @@ async def _build_products_kb(supplier_id: int, category: str, page: int) -> tupl
             " لا توجد منتجات في هذه الفئة.",
         ])
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=" رجوع للفئات", callback_data=f"shop_supplier_{supplier_id}", style="primary")],
+            [InlineKeyboardButton(text=(" Back to categories" if get_current_locale() == "en" else " رجوع للفئات"), callback_data=f"shop_supplier_{supplier_id}", style="primary")],
         ])
         return text, kb
 
@@ -423,7 +424,7 @@ async def _build_products_kb(supplier_id: int, category: str, page: int) -> tupl
         nav: list[InlineKeyboardButton] = []
         if page > 0:
             nav.append(InlineKeyboardButton(
-                text=" السابق",
+                text=(" Previous" if get_current_locale() == "en" else " السابق"),
                 callback_data=f"sv_prods_page:{supplier_id}:{category}:{page - 1}",
                 style="primary",
             ))
@@ -434,13 +435,13 @@ async def _build_products_kb(supplier_id: int, category: str, page: int) -> tupl
         ))
         if page < total_pages - 1:
             nav.append(InlineKeyboardButton(
-                text="التالي ",
+                text=("Next " if get_current_locale() == "en" else "التالي "),
                 callback_data=f"sv_prods_page:{supplier_id}:{category}:{page + 1}",
                 style="primary",
             ))
         rows.append(nav)
 
-    rows.append([InlineKeyboardButton(text=" رجوع للفئات", callback_data=f"shop_supplier_{supplier_id}", style="primary")])
+    rows.append([InlineKeyboardButton(text=(" Back to categories" if get_current_locale() == "en" else " رجوع للفئات"), callback_data=f"shop_supplier_{supplier_id}", style="primary")])
 
     text = NL.join([
         f" <b>{category}</b>",
@@ -543,12 +544,12 @@ async def supplier_product_detail_handler(call: CallbackQuery, state: FSMContext
 
     if available:
         markup = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=" شراء الآن", callback_data=f"sv_buy:{supplier_id}:{product_id}", style="success")],
-            [InlineKeyboardButton(text=" رجوع", callback_data=back_cb, style="primary")],
+            [InlineKeyboardButton(text=(" Buy now" if get_current_locale() == "en" else " شراء الآن"), callback_data=f"sv_buy:{supplier_id}:{product_id}", style="success")],
+            [InlineKeyboardButton(text=(" Back" if get_current_locale() == "en" else " رجوع"), callback_data=back_cb, style="primary")],
         ])
     else:
         markup = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=" رجوع", callback_data=back_cb, style="primary")],
+            [InlineKeyboardButton(text=(" Back" if get_current_locale() == "en" else " رجوع"), callback_data=back_cb, style="primary")],
         ])
 
     try:
@@ -664,8 +665,8 @@ async def supplier_search_message_handler(message: Message, state: FSMContext) -
             " جرّب كلمة أخرى.",
         ])
         markup = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=" بحث جديد", callback_data=f"sv_search:{supplier_id}", style="primary")],
-            [InlineKeyboardButton(text=" رجوع", callback_data=f"shop_supplier_{supplier_id}", style="primary")],
+            [InlineKeyboardButton(text=(" New search" if get_current_locale() == "en" else " بحث جديد"), callback_data=f"sv_search:{supplier_id}", style="primary")],
+            [InlineKeyboardButton(text=(" Back" if get_current_locale() == "en" else " رجوع"), callback_data=f"shop_supplier_{supplier_id}", style="primary")],
         ])
         await message.answer(text, parse_mode="HTML", reply_markup=markup)
         return
@@ -695,12 +696,12 @@ async def supplier_search_message_handler(message: Message, state: FSMContext) -
         )])
 
     rows.append([InlineKeyboardButton(
-        text=" بحث جديد",
+        text=(" New search" if get_current_locale() == "en" else " بحث جديد"),
         callback_data=f"sv_search:{supplier_id}",
         style="primary",
     )])
     rows.append([InlineKeyboardButton(
-        text=" رجوع",
+        text=(" Back" if get_current_locale() == "en" else " رجوع"),
         callback_data=f"shop_supplier_{supplier_id}",
         style="primary",
     )])

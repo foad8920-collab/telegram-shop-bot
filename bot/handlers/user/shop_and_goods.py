@@ -644,7 +644,7 @@ def _local_subscriptions_keyboard(items: list, supplier_items: list | None = Non
         cb = f"sv_prod:{prod.supplier_id}:{prod.id}"
         rows.append([InlineKeyboardButton(text=text, callback_data=cb, style=style)])
     rows.append([InlineKeyboardButton(text=(" Search Featured Subscriptions" if get_current_locale() == "en" else " البحث في الاشتراكات المميزة"), callback_data="local_search", style="primary")])
-    rows.append([InlineKeyboardButton(text=" رجوع", callback_data="back_to_menu", style="primary")])
+    rows.append([InlineKeyboardButton(text=(" Back" if get_current_locale() == "en" else " رجوع"), callback_data="back_to_menu", style="primary")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -676,7 +676,7 @@ async def shop_local_handler(call: CallbackQuery, state: FSMContext):
         await call.message.edit_text(
             ("Could not load Featured Subscriptions. Please try again later." if get_current_locale() == "en" else " تعذّر تحميل الاشتراكات المميزة. حاول لاحقًا."),
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text=" رجوع", callback_data="back_to_menu", style="danger")
+                InlineKeyboardButton(text=(" Back" if get_current_locale() == "en" else " رجوع"), callback_data="back_to_menu", style="danger")
             ]])
         )
         return
@@ -685,7 +685,7 @@ async def shop_local_handler(call: CallbackQuery, state: FSMContext):
         await call.message.edit_text(
             ("No featured subscriptions available right now." if get_current_locale() == "en" else " لا توجد اشتراكات مميزة متاحة حاليًا."),
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text=" رجوع", callback_data="back_to_menu", style="primary")
+                InlineKeyboardButton(text=(" Back" if get_current_locale() == "en" else " رجوع"), callback_data="back_to_menu", style="primary")
             ]])
         )
         return
@@ -756,8 +756,8 @@ async def local_sub_details_handler(call: CallbackQuery, state: FSMContext):
             + f" المتوفر: <b>{available_qty}</b>" + NL
         )
         markup = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=" شراء الآن", callback_data=f"local_buy:{sub.id}", style="success")],
-            [InlineKeyboardButton(text=" رجوع", callback_data="shop_local", style="primary")],
+            [InlineKeyboardButton(text=(" Buy now" if get_current_locale() == "en" else " شراء الآن"), callback_data=f"local_buy:{sub.id}", style="success")],
+            [InlineKeyboardButton(text=(" Back" if get_current_locale() == "en" else " رجوع"), callback_data="shop_local", style="primary")],
         ])
         await call.message.edit_text(text, parse_mode="HTML", reply_markup=markup)
 
