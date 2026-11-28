@@ -41,7 +41,7 @@ from bot.keyboards.inline import (
     pandora_products_keyboard, pandora_product_keyboard,
 )
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from bot.i18n import localize, esc
+from bot.i18n import localize, esc, get_current_locale
 from bot.misc import EnvKeys, LazyPaginator, ReviewRequest
 from bot.misc.metrics import get_metrics
 from bot.misc.services import StackVaultAPIError, StackVaultClient
@@ -487,7 +487,7 @@ async def shop_callback_handler(call: CallbackQuery, state: FSMContext):
     async with Database().session() as session:
         res = await session.execute(select(Supplier).filter_by(is_active=True).order_by(Supplier.sort_order, Supplier.id))
         suppliers = res.scalars().all()
-    await call.message.edit_text("اختر مصدر الاشتراك:", reply_markup=shop_source_keyboard(suppliers))
+    await call.message.edit_text("Choose subscription source:" if get_current_locale() == "en" else "اختر مصدر الاشتراك:", reply_markup=shop_source_keyboard(suppliers))
 
 
 @router.callback_query(F.data == "shop_stackvault")

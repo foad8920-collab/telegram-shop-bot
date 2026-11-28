@@ -59,12 +59,32 @@ async def main_menu(role: int, channel: str | None = None, helper: str | None = 
     return kb.as_markup()
 
 
+def _supplier_display_en(display: str) -> str:
+    """English version of a supplier display name, same icons."""
+    if "الاشتراكات المميزة" in display:
+        return "🏆 Featured Subscriptions 🏆"
+    if "عبر الفئات المتنوعة والجديدة" in display:
+        return "Across diverse and new categories 🎬"
+    if "متنوعه ومختلفة وحديثة" in display or "متنوعة ومختلفة وحديثة" in display:
+        return "Diverse, varied and modern ⌨️"
+    if "جديدة ومتنوعة" in display:
+        return "New and diverse 🎨"
+    return display
+
+
 def shop_source_keyboard(suppliers=None) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+    is_en = False
+    try:
+        is_en = (get_current_locale() == "en")
+    except Exception:
+        is_en = False
     if suppliers:
         for supplier in suppliers:
             sup_style = getattr(supplier, 'style', None) or 'primary'
             display = getattr(supplier, 'display_name', None) or supplier.name
+            if is_en:
+                display = _supplier_display_en(display)
             if getattr(supplier, 'api_url', '') == "local://subscriptions":
                 kb.row(InlineKeyboardButton(
                     text=display,
@@ -72,13 +92,15 @@ def shop_source_keyboard(suppliers=None) -> InlineKeyboardMarkup:
                     style=sup_style
                 ))
             else:
+                prefix = "Subscriptions" if is_en else "اشتراكات"
                 kb.row(InlineKeyboardButton(
-                    text=f"اشتراكات {display}",
+                    text=f"{prefix} {display}",
                     callback_data=f"shop_supplier_{supplier.id}",
                     style=sup_style
                 ))
+    back_text = "🔙 Back" if is_en else "🔙 رجوع"
     kb.row(InlineKeyboardButton(
-        text="🔙 رجوع",
+        text=back_text,
         callback_data="back_to_menu",
         style="primary"
     ))
