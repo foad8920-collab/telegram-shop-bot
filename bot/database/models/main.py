@@ -1162,3 +1162,28 @@ class TopUpRequest(Database.BASE):
     
     def __str__(self):
         return f"#{self.id} - {self.amount_requested}$ ({self.status})"
+
+class VerifiedTransaction(Database.BASE):
+    """A Binance Pay / USDT TRC20 transaction ID already used for an auto top-up.
+
+    The unique txid prevents the same transaction from crediting the
+    balance twice. The row also lets an admin recover a credit that was
+    verified but failed to apply.
+    """
+    __tablename__ = "verified_transactions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    txid: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
+    method: Mapped[str] = mapped_column(String(20), nullable=False)  # binance_pay | tron_usdt
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey('users.telegram_id', ondelete="CASCADE"),
+        nullable=False, index=True
+    )
+    amount_usd: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    used_for: Mapped[str] = mapped_column(String(30), nullable=False, default="topup")
+    verified_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    def __str__(self):
+        return f"{self.txid} - {self.amount_usd}$ ({self.method})"
