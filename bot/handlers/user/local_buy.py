@@ -28,6 +28,7 @@ from bot.database.models.main import (
     LocalSubscriptionOrder, LocalSubscriptionCode, VerifiedTransaction,
 )
 from bot.states import LocalBuy
+from bot.i18n import get_current_locale
 from bot.misc.services.txid_verify import classify_txid_method, validate_txid_format, verify_binance_pay_txid, verify_tron_usdt_txid, copyable_account_value, account_info_rest_lines, payment_method_order_key, TxVerifyError, account_info_display_lines
 from bot.misc.services.updates_channel import send_purchase_post
 
@@ -85,14 +86,14 @@ def _quantity_keyboard(sub_id: int, max_qty: int) -> InlineKeyboardMarkup:
     # "All quantity" button if max > 100
     if max_qty > 100:
         rows.append([InlineKeyboardButton(
-            text=f" كل الكمية ({max_qty})",
+            text=(f" All quantity ({max_qty})" if get_current_locale() == "en" else f" كل الكمية ({max_qty})"),
             callback_data=f"lb_qty:{sub_id}:{max_qty}",
             style="success",
         )])
 
     # Manual input button
     rows.append([InlineKeyboardButton(
-        text=" إدخال رقم مخصص",
+        text=(" Enter custom number" if get_current_locale() == "en" else " إدخال رقم مخصص"),
         callback_data=f"lb_qty_manual:{sub_id}",
         style="primary",
     )])
@@ -110,11 +111,11 @@ def _payment_keyboard(sub_id: int, qty: int, total: Decimal,
                       balance: Decimal, methods: list) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if balance >= total:
-        balance_text = " رصيد البوت (فوري)"
+        balance_text = (" Bot balance (instant)" if get_current_locale() == "en" else " رصيد البوت (فوري)")
         balance_cb = f"lb_pay_balance:{sub_id}:{qty}"
         balance_style = "success"
     else:
-        balance_text = " رصيد البوت (غير كافٍ)"
+        balance_text = (" Bot balance (insufficient)" if get_current_locale() == "en" else " رصيد البوت (غير كافٍ)")
         balance_cb = "lb_insufficient_balance"
         balance_style = "danger"
     rows.append([InlineKeyboardButton(
@@ -486,7 +487,8 @@ async def payment_balance_handler(call: CallbackQuery, state: FSMContext) -> Non
             # نضع FSM للمشتري  للاستقبال الفوري
             try:
                 from aiogram.fsm.storage.base import StorageKey
-                from bot.states import LocalBuy as _LB
+                from bot.states import LocalBuy
+from bot.i18n import get_current_locale as _LB
                 # نحتاج dispatcher  نأخذه من call (لا يوجد)، لذا نعتمد على DB-fallback
                 # سيتولى customer_data_handler  لكننا نحتاج state
                 # الطريقة الأنظف: نضع حالة FSM عبر storage إن أمكن
