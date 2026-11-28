@@ -107,13 +107,13 @@ def _quantity_keyboard(product_id: int, max_qty: int, supplier_id: int = 0) -> I
 
     if max_qty > 100:
         rows.append([InlineKeyboardButton(
-            text=(f"All quantity ({max_qty})" if get_current_locale() == "en" else f"كل الكمية ({max_qty})"),
+            text=(f" All quantity ({max_qty})" if get_current_locale() == "en" else f" كل الكمية ({max_qty})"),
             callback_data=f"sb_qty:{product_id}:{max_qty}",
             style="success",
         )])
 
     rows.append([InlineKeyboardButton(
-        text=("Enter custom number" if get_current_locale() == "en" else "ادخال رقم مخصص"),
+        text=(" Enter custom number" if get_current_locale() == "en" else " ادخال رقم مخصص"),
         callback_data=f"sb_qty_manual:{product_id}",
         style="primary",
     )])
@@ -132,13 +132,13 @@ def _payment_keyboard(product_id: int, qty: int, total: Decimal,
 
     if balance >= total:
         rows.append([InlineKeyboardButton(
-            text=("Bot balance (instant)" if get_current_locale() == "en" else "رصيد البوت (فوري)"),
+            text=(" Bot balance (instant)" if get_current_locale() == "en" else " رصيد البوت (فوري)"),
             callback_data=f"sb_pay_balance:{product_id}:{qty}",
             style="success",
         )])
     else:
         rows.append([InlineKeyboardButton(
-            text=("Bot balance (insufficient)" if get_current_locale() == "en" else "رصيد البوت (غير كاف)"),
+            text=(" Bot balance (insufficient)" if get_current_locale() == "en" else " رصيد البوت (غير كاف)"),
             callback_data="sb_insufficient",
             style="danger",
         )])
