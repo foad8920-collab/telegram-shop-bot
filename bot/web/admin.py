@@ -6,7 +6,6 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
 
 from sqladmin import Admin, BaseView, ModelView, expose, action
-from sqladmin.filters import ForeignKeyFilter
 from sqladmin.authentication import AuthenticationBackend
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -1530,7 +1529,7 @@ class SupplierProductAdmin(ModelView, model=SupplierProduct):
     ]
     column_default_sort = [("id", True)]
     column_filters = [
-        ForeignKeyFilter(SupplierProduct.supplier_id, Supplier.name, title="المورد"),
+        SupplierProduct.supplier_id,
         SupplierProduct.category,
         SupplierProduct.is_visible,
         SupplierProduct.is_available,
