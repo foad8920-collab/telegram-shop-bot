@@ -1,0 +1,1064 @@
+import asyncio
+import hashlib
+import json
+import aiohttp
+from uuid import uuid4
+from decimal import Decimal, ROUND_HALF_UP
+
+from aiogram import Router, F
+from aiogram.types import CallbackQuery, Message, PreCheckoutQuery, SuccessfulPayment
+from aiogram.fsm.context import FSMContext
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+
+from bot.database.methods import get_user_referral, buy_item_transaction, process_payment_with_referral, create_pending_payment
+from bot.database.methods.transactions import prepare_stackvault_purchase, finalize_stackvault_purchase, admin_balance_change
+from bot.keyboards import back, payment_menu, close, get_payment_choice
+from bot.logger_mesh import logger
+from bot.database.methods.audit import log_audit
+from bot.database.methods.cache_utils import safe_create_task
+from bot.misc import EnvKeys, ItemPurchaseRequest, validate_telegram_id, validate_money_amount, PaymentRequest
+from bot.handlers.other import _any_payment_method_enabled, is_safe_item_name, caller_name
+from bot.misc.metrics import get_metrics
+from bot.misc.services import CryptoPayAPI, CryptoPayAPIError, send_stars_invoice, send_fiat_invoice, StackVaultClient, StackVaultAPIError
+from bot.misc.services.txid_verify import classify_txid_method, validate_txid_format, verify_binance_pay_txid, verify_tron_usdt_txid, copyable_account_value, account_info_rest_lines, payment_method_order_key
+from bot.misc.services.payment import _minor_units_for, payload_amount
+from bot.filters import ValidAmountFilter
+from bot.i18n import localize, esc
+from bot.states import BalanceStates
+
+router = Router()
+_stackvault_locks: dict[int, asyncio.Lock] = {}
+
+
+async def _notify_referrer_bonus(bot, user_id: int, amount: Decimal | int, payer_name: str, payer_id: int):
+    """Send referral bonus notification to the referrer if applicable."""
+    referral_id = await get_user_referral(user_id)
+    if not referral_id or not EnvKeys.REFERRAL_PERCENT:
+        return
+    try:
+        clamped_percent = min(max(EnvKeys.REFERRAL_PERCENT, 0), 99)
+        bonus = (Decimal(clamped_percent) / Decimal(100) * Decimal(amount)).quantize(Decimal("0.01"))
+        if bonus > 0:
+            await bot.send_message(
+                referral_id,
+                localize('payments.referral.bonus',
+                         amount=bonus, name=esc(payer_name),
+                         id=payer_id, currency=EnvKeys.PAY_CURRENCY),
+                reply_markup=close()
+            )
+    except (TelegramBadRequest, TelegramForbiddenError) as e:
+        logger.error(f"Failed to send referral notification to user {referral_id}: {e}")
+
+
+_CUR_NAME_AR = {"YER": "الريال اليمني", "SAR": "الريال السعودي", "USD": "الدولار"}
+
+
+def _topup_display(data: dict) -> tuple:
+    """(entered_text, usd_text) for the top-up in state data.
+
+    e.g. ('1000 ريال يمني', '$1.87'). Falls back to the legacy '$amount'
+    when the entered amount was not stored (older sessions).
+    """
+    from decimal import Decimal
+    from bot.database.methods.transactions import format_amount_ar as _fmt_amt
+
+    amount = data.get("amount")
+    entered = data.get("amount_entered")
+    cur = (data.get("amount_currency") or "YER").upper()
+    if entered is None or amount is None:
+        _legacy = f"{amount}$" if amount is not None else ""
+        return _legacy, _legacy
+    return _fmt_amt(Decimal(str(entered)), cur), f"${Decimal(str(amount))}"
+
+
+@router.callback_query(F.data == "replenish_balance")
+async def replenish_balance_callback_handler(call: CallbackQuery, state: FSMContext):
+    """Ask user for the payment currency first (buttons)."""
+    if not _any_payment_method_enabled():
+        await call.answer(localize("payments.not_configured"), show_alert=True)
+        return
+
+    from aiogram.types import InlineKeyboardButton as _KB, InlineKeyboardMarkup as _KM
+    await call.message.edit_text(
+        " <b>اختر عملة الشحن:</b>",
+        parse_mode="HTML",
+        reply_markup=_KM(inline_keyboard=[
+            [_KB(text="دولار (USD)", callback_data="topup_currency:USD")],
+            [_KB(text="ريال سعودي (SAR)", callback_data="topup_currency:SAR")],
+            [_KB(text="ريال يمني (YER)", callback_data="topup_currency:YER")],
+            [_KB(text=" رجوع", callback_data="profile", style="primary")],
+        ]),
+    )
+    await state.set_state(BalanceStates.waiting_currency)
+
+
+@router.callback_query(BalanceStates.waiting_currency, F.data.startswith("topup_currency:"))
+async def topup_currency_choose(call: CallbackQuery, state: FSMContext):
+    """Store the chosen top-up currency, then ask for the amount in it."""
+    await call.answer()
+    cur = (call.data.split(":", 1)[1] or "").strip().upper()
+    if cur not in ("USD", "SAR", "YER"):
+        return
+    await state.update_data(topup_currency=cur)
+    await call.message.edit_text(
+        localize("payments.replenish_prompt", currency=_CUR_NAME_AR[cur]),
+        reply_markup=back('replenish_balance')
+    )
+    await state.set_state(BalanceStates.waiting_amount)
+
+
+@router.message(BalanceStates.waiting_amount)
+async def replenish_balance_amount(message: Message, state: FSMContext):
+    """Parse the amount in the chosen currency, convert to USD, validate, store."""
+    data = await state.get_data()
+    cur = (data.get("topup_currency") or "YER").upper()
+    if cur not in ("USD", "SAR", "YER"):
+        cur = "YER"
+    try:
+        import re as _re
+        from bot.database.methods.transactions import (
+            parse_amount_with_currency as _parse_amt,
+            convert_to_usd as _to_usd,
+            convert_from_usd as _from_usd,
+            get_currency_rates as _rates_fn,
+        )
+        _rates = await _rates_fn()
+        _raw = (message.text or "").strip()
+        _digits = _raw.translate(str.maketrans("\u0660\u0661\u0662\u0663\u0664\u0665\u0666\u0667\u0668\u0669", "0123456789"))
+        _is_bare = bool(_re.match(r"^[0-9][0-9,]*(\.[0-9]+)?$", _digits))
+        _entered, _parsed_cur = _parse_amt(_raw)
+        if _is_bare:
+            _parsed_cur = cur
+        _usd = _to_usd(_entered, _parsed_cur, _rates)
+        if _entered <= 0 or _usd > Decimal(EnvKeys.MAX_AMOUNT):
+            raise ValueError("out of range")
+    except Exception:
+        try:
+            from bot.database.methods.transactions import convert_from_usd as _from_usd2, get_currency_rates as _rates_fn2
+            _r2 = await _rates_fn2()
+            _mn = Decimal("1")
+            _mx = _from_usd2(Decimal(EnvKeys.MAX_AMOUNT), cur, _r2, ceiling=False)
+        except Exception:
+            _mn, _mx = Decimal("1"), Decimal(EnvKeys.MAX_AMOUNT)
+        _disp = lambda d: format(Decimal(str(d)).normalize(), "f")
+        await message.answer(
+            localize("payments.replenish_invalid",
+                     min_amount=_disp(_mn),
+                     max_amount=_disp(_mx),
+                     currency=_CUR_NAME_AR[cur]),
+            reply_markup=back('replenish_balance')
+        )
+        return
+
+    await state.update_data(amount=str(_usd), amount_entered=str(_entered), amount_currency=_parsed_cur, topup_currency=_parsed_cur)
+    await message.answer(
+        localize("payments.method_choose"),
+        reply_markup=get_payment_choice()
+    )
+    await state.set_state(BalanceStates.waiting_payment)
+
+
+
+
+
+@router.callback_query(
+    BalanceStates.waiting_payment,
+    F.data.in_(["pay_cryptopay", "pay_stars", "pay_fiat"])
+)
+async def process_replenish_balance(call: CallbackQuery, state: FSMContext):
+    """Create an invoice for the chosen payment method."""
+    data = await state.get_data()
+    amount = data.get('amount')
+
+    if amount is None:
+        await call.answer(localize("payments.session_expired"), show_alert=True)
+        await call.message.edit_text(localize("menu.title"), reply_markup=back('back_to_menu'))
+        await state.clear()
+        return
+
+    # Map callback data to provider
+    provider_map = {
+        "pay_cryptopay": "cryptopay",
+        "pay_stars": "stars",
+        "pay_fiat": "fiat"
+    }
+    provider = provider_map.get(call.data)
+
+    try:
+        # Validate payment request
+        payment_request = PaymentRequest(
+            amount=Decimal(amount),
+            currency=EnvKeys.PAY_CURRENCY,
+            provider=provider
+        )
+
+        amount_dec = payment_request.amount
+        ttl_seconds = int(EnvKeys.PAYMENT_TIME)
+
+        if call.data == "pay_cryptopay":
+            if not EnvKeys.CRYPTO_PAY_TOKEN:
+                await call.answer(localize("payments.not_configured"), show_alert=True)
+                return
+
+            try:
+                crypto = CryptoPayAPI()
+                invoice = await crypto.create_invoice(
+                    amount=float(amount_dec),
+                    expires_in=ttl_seconds,
+                    currency=payment_request.currency,
+                    accepted_assets="TON,USDT,BTC,ETH",
+                    payload=str(call.from_user.id),
+                )
+            except CryptoPayAPIError as e:
+                await log_audit("cryptopay_error", level="ERROR", user_id=call.from_user.id, resource_type="Payment", details=f"[{e.code}] {e.name}")
+                await call.answer(localize("payments.crypto.api_error", error=e.name), show_alert=True)
+                return
+            except Exception as e:
+                await log_audit("cryptopay_invoice_fail", level="ERROR", user_id=call.from_user.id, resource_type="Payment", details=str(e))
+                await call.answer(localize("payments.crypto.create_fail", error=str(e)), show_alert=True)
+                return
+
+            pay_url = invoice.get("mini_app_invoice_url")
+            invoice_id = invoice.get("invoice_id")
+
+            await create_pending_payment(
+                provider="cryptopay",
+                external_id=str(invoice_id),
+                user_id=call.from_user.id,
+                amount=int(amount_dec),
+                currency=payment_request.currency,
+            )
+
+            await state.update_data(invoice_id=invoice_id, payment_type="cryptopay")
+
+            await call.message.edit_text(
+                localize("payments.invoice.summary",
+                         amount=amount_dec,
+                         minutes=int(ttl_seconds / 60),
+                         button=localize("btn.check_payment"),
+                         currency=payment_request.currency),
+                reply_markup=payment_menu(pay_url)
+            )
+
+        elif call.data == "pay_stars":
+            if EnvKeys.STARS_PER_VALUE > 0:
+                try:
+                    await send_stars_invoice(
+                        bot=call.message.bot,
+                        chat_id=call.from_user.id,
+                        amount=int(amount_dec),
+                    )
+                except Exception as e:
+                    await log_audit("stars_invoice_fail", level="ERROR", user_id=call.from_user.id, resource_type="Payment", details=str(e))
+                    await call.answer(localize("payments.stars.create_fail", error=str(e)), show_alert=True)
+                    return
+                await state.clear()
+            else:
+                await call.answer(localize("payments.not_configured"), show_alert=True)
+                return
+
+        elif call.data == "pay_fiat":
+            if not EnvKeys.TELEGRAM_PROVIDER_TOKEN:
+                await call.answer(localize("payments.not_configured"), show_alert=True)
+                return
+
+            try:
+                await send_fiat_invoice(
+                    bot=call.message.bot,
+                    chat_id=call.from_user.id,
+                    amount=int(amount_dec),
+                )
+            except Exception as e:
+                await log_audit("fiat_invoice_fail", level="ERROR", user_id=call.from_user.id, resource_type="Payment", details=str(e))
+                await call.answer(localize("payments.fiat.create_fail", error=str(e)), show_alert=True)
+                return
+            await state.clear()
+
+    except Exception as e:
+        logger.error(f"Payment processing error: {e}")
+        await state.clear()
+        await call.answer(localize("errors.something_wrong"), show_alert=True)
+
+
+@router.callback_query(F.data == "check")
+async def checking_payment(call: CallbackQuery, state: FSMContext):
+    """
+    Check CryptoPay invoice status and credit balance if paid.
+    """
+    user_id = call.from_user.id
+    data = await state.get_data()
+    payment_type = data.get("payment_type")
+
+    if not payment_type:
+        await call.answer(localize("payments.no_active_invoice"), show_alert=True)
+        return
+
+    if payment_type == "cryptopay":
+        invoice_id = data.get("invoice_id")
+        if not invoice_id:
+            await call.answer(localize("payments.invoice_not_found"), show_alert=True)
+            await state.clear()
+            return
+
+        try:
+            crypto = CryptoPayAPI()
+            info = await crypto.get_invoice(invoice_id)
+        except CryptoPayAPIError as e:
+            await log_audit("cryptopay_check_error", level="ERROR", user_id=user_id, resource_type="Payment", details=f"[{e.code}] {e.name}")
+            await call.answer(localize("payments.crypto.api_error", error=e.name), show_alert=True)
+            return
+        except Exception as e:
+            await log_audit("cryptopay_get_fail", level="ERROR", user_id=user_id, resource_type="Payment", details=str(e))
+            await call.answer(localize("payments.crypto.check_fail", error=str(e)), show_alert=True)
+            return
+
+        status = info.get("status")
+        if status == "paid":
+            balance_amount = Decimal(str(info.get("amount", "0"))).quantize(Decimal("0.01"))
+
+            if balance_amount <= 0:
+                await call.answer(localize("payments.unable_determine_amount"), show_alert=True)
+                return
+
+            # Use transactional payment processing
+            success, error_msg = await process_payment_with_referral(
+                user_id=user_id,
+                amount=balance_amount,
+                provider="cryptopay",
+                external_id=str(invoice_id),
+                referral_percent=EnvKeys.REFERRAL_PERCENT
+            )
+
+            if not success:
+                if error_msg == "already_processed":
+                    await call.answer(localize("payments.already_processed"), show_alert=True)
+                else:
+                    await call.answer(localize("errors.general_error", e=error_msg), show_alert=True)
+                return
+
+            metrics = get_metrics()
+            if metrics:
+                metrics.track_event("payment", user_id, {"amount": balance_amount, "provider": "cryptopay"})
+
+            # Send a notification to the referrer
+            await _notify_referrer_bonus(call.bot, user_id, balance_amount, call.from_user.first_name, call.from_user.id)
+
+            await call.message.edit_text(
+                localize("payments.topped_simple",
+                         amount=balance_amount,
+                         currency=EnvKeys.PAY_CURRENCY),
+                reply_markup=back('profile')
+            )
+            await state.clear()
+
+            safe_create_task(log_audit(
+                "balance_replenish",
+                user_id=user_id,
+                resource_type="Payment",
+                details=f"name={caller_name(call)}, amount={balance_amount} {EnvKeys.PAY_CURRENCY}, provider=cryptopay",
+            ))
+
+        elif status == "active":
+            await call.answer(localize("payments.not_paid_yet"))
+        else:
+            await call.answer(localize("payments.expired"), show_alert=True)
+
+
+@router.pre_checkout_query()
+async def pre_checkout_handler(query: PreCheckoutQuery):
+    """Validate the payment before Telegram processes it."""
+    try:
+        payload = json.loads(query.invoice_payload or "{}")
+    except Exception:
+        await query.answer(ok=False, error_message="Invalid payload")
+        return
+
+    amount = payload_amount(payload)
+    if amount <= 0:
+        await query.answer(ok=False, error_message="Invalid amount")
+        return
+
+    if amount < int(EnvKeys.MIN_AMOUNT):
+        await query.answer(ok=False, error_message="Amount below minimum")
+        return
+
+    if amount > int(EnvKeys.MAX_AMOUNT):
+        await query.answer(ok=False, error_message="Amount exceeds maximum")
+        return
+
+    await query.answer(ok=True)
+
+
+@router.message(F.successful_payment)
+async def successful_payment_handler(message: Message):
+    """
+    Handle successful payment:
+    - XTR (Stars): total_amount is ⭐. take CURRENCY from payload (amount) or convert ⭐ → CURRENCY.
+    - Fiat: total_amount is minor units; divide by 100 (or 1 for JPY/KRW).
+    """
+    sp: SuccessfulPayment = message.successful_payment
+    user_id = message.from_user.id
+
+    payload = {}
+    try:
+        if sp.invoice_payload:
+            payload = json.loads(sp.invoice_payload)
+    except Exception:
+        payload = {}
+
+    amount = payload_amount(payload)
+
+    if amount <= 0:
+        if sp.currency == "XTR":
+            # Stars, no usable payload: reverse the conversion as a last resort.
+            amount = int(
+                (Decimal(int(sp.total_amount)) / Decimal(str(EnvKeys.STARS_PER_VALUE)))
+                .to_integral_value(rounding=ROUND_HALF_UP)
+            )
+        else:
+            # Fiat: total_amount is exact in minor units, so this is lossless.
+            currency = sp.currency.upper()
+            multiplier = _minor_units_for(currency)
+            amount = int(Decimal(sp.total_amount) / Decimal(multiplier))
+
+    if amount <= 0:
+        await message.answer(localize("payments.unable_determine_amount"), reply_markup=close())
+        return
+
+    # Idempotence
+    provider = "telegram" if sp.currency != "XTR" else "stars"
+    external_id = sp.telegram_payment_charge_id or sp.provider_payment_charge_id
+    if not external_id:
+        digest = hashlib.sha256(
+            f"{provider}|{user_id}|{sp.currency}|{sp.total_amount}|{sp.invoice_payload or ''}".encode()
+        ).hexdigest()
+        external_id = f"{provider}:fallback:{digest[:32]}"
+        logger.warning(
+            "successful_payment without a charge id for user %s (%s %s); "
+            "falling back to a derived idempotency key %s",
+            user_id, sp.total_amount, sp.currency, external_id,
+        )
+
+    success, error_msg = await process_payment_with_referral(
+        user_id=user_id,
+        amount=Decimal(amount),
+        provider=provider,
+        external_id=external_id,
+        referral_percent=EnvKeys.REFERRAL_PERCENT
+    )
+
+    if not success:
+        if error_msg == "already_processed":
+            await message.answer(localize("payments.already_processed"), reply_markup=close())
+        else:
+            await message.answer(localize("payments.processing_error"), reply_markup=close())
+        return
+
+    # Sending notification to referrer
+    await _notify_referrer_bonus(message.bot, user_id, amount, message.from_user.first_name, message.from_user.id)
+
+    metrics = get_metrics()
+    if metrics:
+        metrics.track_event("payment", user_id, {"amount": amount, "provider": provider})
+
+    suffix = localize("payments.success_suffix.stars") if sp.currency == "XTR" else localize(
+        "payments.success_suffix.tg")
+    await message.answer(
+        localize('payments.topped_with_suffix', amount=amount, suffix=suffix, currency=EnvKeys.PAY_CURRENCY),
+        reply_markup=back('profile')
+    )
+
+    safe_create_task(log_audit(
+        "balance_replenish",
+        user_id=user_id,
+        resource_type="Payment",
+        details=f"name={caller_name(message)}, amount={amount} {EnvKeys.PAY_CURRENCY}, provider={suffix}",
+    ))
+
+
+@router.callback_query(F.data == "buy_item")
+async def buy_item_callback_handler(call: CallbackQuery, state: FSMContext):
+    """Processing the purchase of goods with full transactional security."""
+    try:
+        # Get item name from state (stored when viewing item info)
+        data = await state.get_data()
+        raw_item_name = data.get('csrf_item')
+
+        if not raw_item_name:
+            await call.answer(localize("middleware.security.invalid_csrf"), show_alert=True)
+            return
+
+        metrics = get_metrics()
+
+        # Validation via Pydantic
+        purchase_request = ItemPurchaseRequest(
+            item_name=raw_item_name,
+            user_id=call.from_user.id
+        )
+
+        # Additional check for SQL injection
+        if not is_safe_item_name(purchase_request.item_name):
+            await call.answer(
+                localize("errors.invalid_item_name"),
+                show_alert=True
+            )
+            await log_audit("suspicious_item_name", level="WARNING", user_id=call.from_user.id, resource_type="Item", details=raw_item_name)
+            return
+
+        # User_id validation
+        try:
+            user_id = validate_telegram_id(call.from_user.id)
+        except ValueError:
+            await call.answer(localize("errors.invalid_user"), show_alert=True)
+            return
+
+        # Show the processing indicator
+        await call.answer(localize("shop.purchase.processing"))
+
+        # Get promo code from state if applied
+        promo_code = data.get('applied_promo')
+
+        # Serialize StackVault attempts per user; ordinary products keep their existing path.
+        sv_lock = _stackvault_locks.setdefault(user_id, asyncio.Lock())
+        current = await state.get_data()
+        if current.get("stackvault_unknown"):
+            await call.answer(
+                "حالة طلب StackVault السابق غير مؤكدة. لا تعاود المحاولة تلقائيًا.",
+                show_alert=True,
+            )
+            return
+        if sv_lock.locked() or current.get("stackvault_processing"):
+            await call.answer("عملية شراء StackVault قيد التنفيذ، يرجى الانتظار.", show_alert=True)
+            return
+        await sv_lock.acquire()
+        stackvault_state = False
+        try:
+            current = await state.get_data()
+            if current.get("stackvault_unknown"):
+                await call.answer(
+                    "حالة طلب StackVault السابق غير مؤكدة. لا تعاود المحاولة تلقائيًا.",
+                    show_alert=True,
+                )
+                return
+            if current.get("stackvault_processing"):
+                await call.answer("عملية شراء StackVault قيد التنفيذ، يرجى الانتظار.", show_alert=True)
+                return
+            await state.update_data(stackvault_processing=True)
+
+            # StackVault orders are created outside the local transaction/row lock.
+            is_sv, sv_status, sv_info = await prepare_stackvault_purchase(user_id, purchase_request.item_name, promo_code)
+            if is_sv:
+                stackvault_state = True
+                idempotency_key = f"stackvault:{user_id}:{uuid4().hex}"
+                await state.update_data(stackvault_idempotency_key=idempotency_key)
+                try:
+                    async with StackVaultClient() as client:
+                        response = await client.create_order(
+                            product_id=sv_info["product_id"], quantity=1, idempotency_key=idempotency_key
+                        )
+                    order = response.get("order") if isinstance(response.get("order"), dict) else response
+                    order_id = order.get("order_id") or order.get("id")
+                    delivery = order.get("delivery")
+                    if not order_id:
+                        raise StackVaultAPIError("StackVault order response missing order_id")
+                    if delivery is None:
+                        # The order was accepted, but the create response is incomplete.
+                        # Recover by lookup without issuing another POST.
+                        try:
+                            async with StackVaultClient() as client:
+                                lookup = await client.get_order(str(order_id))
+                            recovered = lookup.get("order") if isinstance(lookup.get("order"), dict) else lookup
+                            status = str(recovered.get("status", "")).lower()
+                            delivery = recovered.get("delivery")
+                            if status in {"failed", "rejected", "declined", "cancelled", "canceled"}:
+                                raise StackVaultAPIError(f"StackVault order was {status}")
+                            if status not in {"success", "successful", "completed", "complete", "delivered", "fulfilled"} or delivery is None:
+                                raise StackVaultAPIError("Unable to verify StackVault order")
+                            order = recovered
+                        except StackVaultAPIError:
+                            raise
+                        except Exception as e:
+                            raise StackVaultAPIError("Unable to verify StackVault order") from e
+                except StackVaultAPIError as e:
+                    cause = e.__cause__
+                    status = getattr(cause, "status", None)
+                    uncertain = (
+                        isinstance(cause, (TimeoutError, ConnectionError, aiohttp.ClientConnectionError))
+                        or (status is not None and status >= 500)
+                    )
+                    if uncertain:
+                        await state.update_data(
+                            stackvault_unknown=True,
+                            stackvault_idempotency_key=idempotency_key,
+                        )
+                        await log_audit("stackvault_order_unknown", level="ERROR", user_id=user_id, resource_type="Item", resource_id=purchase_request.item_name, details=str(e))
+                        await call.message.edit_text(
+                            "حالة طلب StackVault غير مؤكدة بسبب انقطاع الاتصال. لا تعاود المحاولة تلقائيًا.",
+                            reply_markup=back('back_to_item'),
+                        )
+                        return
+                    await log_audit("stackvault_order_failed", level="ERROR", user_id=user_id, resource_type="Item", resource_id=purchase_request.item_name, details=str(e))
+                    await call.message.edit_text(localize("shop.purchase.fail.general"), reply_markup=back('back_to_item'))
+                    return
+                delivery_value = delivery if isinstance(delivery, str) else json.dumps(delivery, ensure_ascii=False)
+                success, message, purchase_data = await finalize_stackvault_purchase(
+                    user_id, purchase_request.item_name, sv_info["price"], delivery_value, promo_code
+                )
+                if not success:
+                    await log_audit("stackvault_order_local_finalize_failed", level="ERROR", user_id=user_id, resource_type="Item", resource_id=str(order_id), details=message)
+                    error_key = "shop.insufficient_funds" if message == "insufficient_funds_after_stackvault" else "shop.purchase.fail.general"
+                    await call.message.edit_text(localize(error_key), reply_markup=back('back_to_item'))
+                    return
+                purchase_data["stackvault_order_id"] = order_id
+                # Continue through the existing receipt path; delivery is sent only after local commit.
+            else:
+                await state.update_data(stackvault_processing=False)
+                sv_lock.release()
+                if sv_status != "not_stackvault":
+                    error_key = {"user_not_found": "shop.purchase.fail.user_not_found", "item_not_found": "shop.item.not_found", "insufficient_funds": "shop.insufficient_funds"}.get(sv_status, "shop.purchase.fail.general")
+                    await call.message.edit_text(localize(error_key), reply_markup=back('back_to_item'))
+                    return
+        finally:
+            final_data = await state.get_data()
+            preserved = {"stackvault_unknown", "stackvault_idempotency_key"} if final_data.get("stackvault_unknown") else set()
+            await state.set_data({k: v for k, v in final_data.items() if k not in {"stackvault_processing", "stackvault_idempotency_key"} or k in preserved})
+            if sv_lock.locked():
+                sv_lock.release()
+
+        if not stackvault_state:
+            # Preserve the existing path for ordinary products and its stock semantics.
+            pass
+
+        # Execute a transactional purchase
+        if sv_status == "not_stackvault":
+            success, message, purchase_data = await buy_item_transaction(user_id, purchase_request.item_name, promo_code=promo_code)
+
+        if not success:
+            # Error handling
+            error_messages = {
+                "user_not_found": "shop.purchase.fail.user_not_found",
+                "item_not_found": "shop.item.not_found",
+                "insufficient_funds": "shop.insufficient_funds",
+                "out_of_stock": "shop.out_of_stock",
+                "promo_invalid": "promo.not_found",
+                "promo_expired": "promo.expired",
+                "promo_max_uses": "promo.max_uses_reached",
+                "promo_already_used": "promo.already_used",
+                "promo_wrong_item": "promo.wrong_item",
+                "promo_wrong_category": "promo.wrong_category",
+            }
+
+            error_text = localize(
+                error_messages.get(message, "shop.purchase.fail.general"),
+                message=message
+            )
+
+            await call.message.edit_text(
+                error_text,
+                reply_markup=back('back_to_item')
+            )
+
+            if message not in error_messages:
+                await log_audit("purchase_error", level="ERROR", user_id=user_id, resource_type="Item", resource_id=purchase_request.item_name, details=message)
+            return
+
+        # Successful purchase - sanitize the output
+
+        if metrics:
+            metrics.track_event("purchase", call.from_user.id, {
+                "item": purchase_request.item_name,
+                "price": purchase_data['price']
+            })
+            metrics.track_conversion("purchase_funnel", "purchase", call.from_user.id)
+
+        # Escaped, never "sanitized": a delivered value is data the buyer copies
+        # verbatim, so a key that happens to contain <b> must show as <b>.
+        safe_value = esc(purchase_data['value'])
+        username = esc(call.from_user.username or call.from_user.first_name)
+
+        # The promo was consumed by this purchase
+        await state.update_data(applied_promo=None)
+
+        from bot.keyboards.inline import simple_buttons
+        buttons = [
+            (f"📦 {purchase_data['item_name']}", f"bought-item:{purchase_data['bought_id']}:back_to_item"),
+            (localize("btn.back"), "back_to_item"),
+        ]
+
+        await call.message.edit_text(
+            localize(
+                'shop.purchase.receipt',
+                item_name=esc(purchase_data['item_name']),
+                price=purchase_data['price'],
+                unique_id=purchase_data['unique_id'],
+                datetime=purchase_data['bought_datetime'],
+                username=username,
+                user_id=call.from_user.id,
+                value=safe_value,
+                currency=EnvKeys.PAY_CURRENCY,
+            ),
+            parse_mode='HTML',
+            reply_markup=simple_buttons(buttons),
+        )
+
+        safe_create_task(log_audit(
+            "purchase",
+            user_id=user_id,
+            resource_type="Item",
+            resource_id=purchase_request.item_name[:100],
+            details=(
+                f"name={caller_name(call)[:50]}, "
+                f"price={purchase_data['price']} {EnvKeys.PAY_CURRENCY}, "
+                f"unique_id={purchase_data['unique_id']}"
+            ),
+        ))
+
+    except Exception as e:
+        logger.error(f"Critical error in purchase handler: {e}")
+        await call.answer(
+            localize("errors.something_wrong"),
+            show_alert=True
+        )
+
+
+# ============================================================
+#   التحويل اليدوي (صورة السند)  شحن الرصيد
+# ============================================================
+from bot.database.models.main import TopUpRequest, PaymentMethod, User, VerifiedTransaction
+from bot.database.main import Database
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+import logging as _topup_logging
+
+_topup_logger = _topup_logging.getLogger(__name__)
+
+
+def _get_admin_ids_topup() -> list[int]:
+    """جلب معرفات المشرفين (نفس أسلوب local_buy_receipts)."""
+    result: list[int] = []
+    for attr in ("ADMINS", "ADMIN_ID", "OWNER_ID"):
+        raw = getattr(EnvKeys, attr, None)
+        if not raw:
+            continue
+        if isinstance(raw, (list, tuple, set)):
+            for x in raw:
+                try:
+                    result.append(int(x))
+                except (ValueError, TypeError):
+                    pass
+        else:
+            for p in str(raw).split(","):
+                try:
+                    result.append(int(p.strip()))
+                except (ValueError, TypeError):
+                    pass
+    return list(dict.fromkeys(result))
+
+
+def _admin_topup_keyboard(req_id: int):
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=" تأكيد", callback_data=f"topup_approve:{req_id}", style="success"),
+            InlineKeyboardButton(text=" تعديل", callback_data=f"topup_edit:{req_id}", style="primary"),
+            InlineKeyboardButton(text=" رفض", callback_data=f"topup_reject:{req_id}", style="danger"),
+        ],
+    ])
+
+
+@router.callback_query(BalanceStates.waiting_payment, F.data == "pay_manual")
+async def pay_manual_start(call: CallbackQuery, state: FSMContext):
+    """عرض طرق الدفع النشطة من قاعدة البيانات."""
+    data = await state.get_data()
+    amount = data.get("amount")
+    if not amount:
+        await call.answer(localize("payments.session_expired"), show_alert=True)
+        await state.clear()
+        return
+
+    # جلب طرق الدفع النشطة من قاعدة البيانات
+    async with Database().session() as session:
+        methods = (await session.execute(
+            select(PaymentMethod).where(PaymentMethod.is_active == True)
+        )).scalars().all()
+    methods = sorted(methods, key=payment_method_order_key)
+
+    if not methods:
+        await call.message.edit_text(
+            " لا توجد طرق دفع متاحة حالياً. يرجى التواصل مع الدعم.",
+            parse_mode="HTML"
+        )
+        await state.clear()
+        return
+
+    # بناء أزرار لطرق الدفع
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    rows = []
+    for m in methods:
+        rows.append([InlineKeyboardButton(
+            text=f" {m.name}",
+            callback_data=f"topup_method:{m.id}",
+            style=m.style or "primary"
+        )])
+    rows.append([InlineKeyboardButton(text=" رجوع", callback_data="replenish_balance", style="primary")])
+
+    _entered_txt, _usd_txt = _topup_display(data)
+    await call.message.edit_text(
+        f" <b>اختر طريقة الدفع</b>\n\n"
+        f" المبلغ: <b>{_entered_txt}</b>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+    )
+    await state.set_state(BalanceStates.waiting_receipt)
+
+
+@router.callback_query(BalanceStates.waiting_receipt, F.data.startswith("topup_method:"))
+async def pay_manual_show_account(call: CallbackQuery, state: FSMContext):
+    """عرض رقم الحساب لطريقة الدفع المختارة."""
+    await call.answer()
+    method_id = int(call.data.split(":")[1])
+    data = await state.get_data()
+    amount = data.get("amount")
+    if not amount:
+        await call.answer(localize("payments.session_expired"), show_alert=True)
+        await state.clear()
+        return
+
+    async with Database().session() as session:
+        pm = (await session.execute(
+            select(PaymentMethod).where(PaymentMethod.id == method_id)
+        )).scalar_one_or_none()
+        if not pm:
+            await call.answer(" طريقة الدفع غير موجودة.", show_alert=True)
+            return
+
+    await state.update_data(payment_method_id=method_id, payment_method_name=pm.name)
+
+    _txid_kind = classify_txid_method(pm.name or "")
+    if _txid_kind:
+        _instruction = " قم بتحويل المبلغ، ثم أرسل <b>ايدي العملية (TxID)</b> هنا - انسخه من تطبيق بينانس/محفظتك - أو أرسل <b>صورة السند</b>."
+    else:
+        _instruction = " قم بتحويل المبلغ، ثم أرسل <b>صورة سند الحوالة</b> هنا."
+
+    _copy_value = copyable_account_value(pm.name, pm.account_info)
+    if _copy_value:
+        _rest = account_info_rest_lines(pm.account_info, _copy_value)
+        _account_block = f"<code>{_copy_value}</code>" + ("\n" + "\n".join(_rest) if _rest else "")
+    else:
+        _account_block = f"<code>{pm.account_info}</code>"
+
+    _entered_txt, _usd_txt = _topup_display(data)
+    await call.message.edit_text(
+        f" <b>{pm.name}</b>\n\n"
+        f" المبلغ: <b>{_entered_txt}</b>\n\n"
+        f" <b>رقم الحساب / التعليمات:</b>\n"
+        f"{_account_block}\n\n"
+        f" {_instruction}",
+        parse_mode="HTML"
+    )
+    await state.set_state(BalanceStates.waiting_receipt)
+
+
+@router.message(BalanceStates.waiting_receipt, F.text)
+async def pay_manual_txid(message: Message, state: FSMContext):
+    """Verify a pasted TxID (Binance Pay / USDT TRC20) and auto-credit the balance.
+
+    Photo receipts stay the path for Yemeni wallets (no API); Binance and
+    crypto are verified automatically and never need a photo.
+    """
+    text = (message.text or "").strip()
+    if text.startswith("/"):
+        return
+    data = await state.get_data()
+    amount_raw = data.get("amount")
+    pm_id = data.get("payment_method_id")
+    pm_name = data.get("payment_method_name") or ""
+    if not amount_raw or not pm_id:
+        await message.answer(" انتهت الجلسة. ابدأ الشحن من جديد.")
+        await state.clear()
+        return
+    kind = classify_txid_method(pm_name)
+    if not kind:
+        await message.answer(" هذه الطريقة تحتاج صورة سند الحوالة - أرسل الصورة هنا.")
+        return
+    txid = text
+    if not validate_txid_format(kind, txid):
+        if kind == "binance_pay":
+            hint = "ايدي عملية بينانس يبدأ بـ M_P_ - انسخه من تفاصيل التحويل في تطبيق بينانس."
+        else:
+            hint = "رقم عملية ترون 64 حرفا (أرقام وحروف a-f) - انسخه من محفظتك."
+        await message.answer(f" رقم العملية غير صحيح. {hint}")
+        return
+    try:
+        expected = Decimal(str(amount_raw))
+    except Exception:
+        await message.answer(" انتهت الجلسة. ابدأ الشحن من جديد.")
+        await state.clear()
+        return
+    # Ensure the replay-protection table exists (no-op if Alembic made it).
+    async with Database().session() as session:
+        await session.run_sync(lambda s: VerifiedTransaction.__table__.create(s, checkfirst=True))
+        await session.commit()
+    # Replay protection: reject an already-used TxID before calling the APIs.
+    async with Database().session() as session:
+        used = (await session.execute(
+            select(VerifiedTransaction).where(VerifiedTransaction.txid == txid)
+        )).scalar_one_or_none()
+        if used is not None:
+            await message.answer(" هذا الايدي مستخدم من قبل - لا يمكن شحن الرصيد به مرة أخرى.")
+            return
+    try:
+        if kind == "binance_pay":
+            ok, received, reason = await verify_binance_pay_txid(txid, expected)
+        else:
+            ok, received, reason = await verify_tron_usdt_txid(txid, expected)
+    except Exception as e:
+        logger.warning("TxID verify failed for %s: %s", txid, e)
+        await message.answer(" تعذر التحقق الآن - حاول بعد دقيقة، أو أرسل صورة السند.")
+        return
+    if not ok:
+        if reason == "not_found":
+            await message.answer(" لم أجد هذه العملية بعد - تأكد من نسخ الايدي كاملا، وإن كنت حوّلت للتو انتظر دقيقة ثم أعد إرساله.")
+        elif reason == "wrong_receiver":
+            await message.answer(" هذه العملية لم تصل إلى حساب المتجر - تأكد أنك حوّلت إلى الرقم/العنوان الصحيح.")
+        elif reason == "amount_low":
+            arrived = f"${received}" if received is not None else "مبلغ أقل"
+            await message.answer(f" المبلغ المحوَّل ({arrived}) أقل من المطلوب (${expected}) - أكمل الفرق بعملية جديدة أو أرسل صورة السند.")
+        elif reason == "wrong_type":
+            await message.answer(" هذه العملية ليست تحويل Binance Pay بين مستخدمين - تأكد من الايدي.")
+        elif reason == "tx_failed":
+            await message.answer(" هذه العملية موجودة لكنها فاشلة على الشبكة - تحقق من محفظتك.")
+        elif reason == "not_configured":
+            await message.answer(" التحقق التلقائي غير مفعّل بعد - أرسل صورة السند.")
+        else:
+            await message.answer(" تعذر التحقق الآن - حاول بعد دقيقة، أو أرسل صورة السند.")
+        return
+    # Record the TxID first (unique): a second use is rejected even if credit fails below.
+    try:
+        async with Database().session() as session:
+            session.add(VerifiedTransaction(
+                txid=txid, method=kind, user_id=message.from_user.id,
+                amount_usd=received, used_for="topup",
+            ))
+            await session.commit()
+    except IntegrityError:
+        await message.answer(" هذا الايدي مستخدم من قبل - لا يمكن شحن الرصيد به مرة أخرى.")
+        return
+    except Exception as e:
+        logger.warning("VerifiedTransaction insert failed for %s: %s", txid, e)
+        await message.answer(" تم التحقق لكن تعذر تسجيل العملية - تواصل مع الدعم.")
+        return
+    credited, _msg = await admin_balance_change(message.from_user.id, received)
+    if not credited:
+        await message.answer(" تم التحقق من العملية وسُجلت، لكن تعذر شحن الرصيد - تواصل مع الدعم وسيتم الشحن يدويا.")
+        await state.clear()
+        return
+    # New balance for the confirmation.
+    new_balance = None
+    try:
+        async with Database().session() as session:
+            _u = (await session.execute(select(User).where(User.telegram_id == message.from_user.id))).scalar_one_or_none()
+            if _u is not None and _u.balance is not None:
+                new_balance = _u.balance
+    except Exception:
+        new_balance = None
+    _entered_txt, _usd_txt = _topup_display(data)
+    _bal_line = f"\n رصيدك الآن: <b>${new_balance}</b>" if new_balance is not None else ""
+    await message.answer(
+        f" تم التحقق من العملية!\n\n"
+        f" شُحن رصيدك بـ <b>${received}</b> (المطلوب كان {_entered_txt}).{_bal_line}",
+        parse_mode="HTML",
+    )
+    for admin_id in _get_admin_ids_topup():
+        try:
+            await message.bot.send_message(
+                chat_id=admin_id,
+                text=(
+                    f" شحن تلقائي موثّق\n\n"
+                    f" المستخدم: <code>{message.from_user.id}</code>\n"
+                    f" المبلغ: <b>${received}</b>\n"
+                    f" الطريقة: <b>{pm_name}</b>\n"
+                    f" العملية: <code>{txid}</code>"
+                ),
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            logger.warning("Admin auto-topup notify failed: %s", e)
+    await state.clear()
+
+@router.message(BalanceStates.waiting_receipt, F.photo)
+async def pay_manual_receipt(message: Message, state: FSMContext):
+    """استقبال صورة السند وإرسالها للمشرف."""
+    data = await state.get_data()
+    amount = data.get("amount")
+    if not amount:
+        await message.answer(" انتهت الجلسة. ابدأ من جديد.")
+        await state.clear()
+        return
+
+    file_id = message.photo[-1].file_id
+    user_id = message.from_user.id
+    username = message.from_user.full_name or message.from_user.username or f"User{user_id}"
+    pm_id = data.get("payment_method_id")
+    pm_name = data.get("payment_method_name", "غير محدد")
+
+    try:
+        async with Database().session() as session:
+            req = TopUpRequest(
+                user_id=user_id,
+                payment_method_id=pm_id,
+                amount_requested=Decimal(str(amount)),
+                receipt_photo_id=file_id,
+                status="pending",
+            )
+            session.add(req)
+            await session.commit()
+            await session.refresh(req)
+            req_id = req.id
+    except Exception as e:
+        _topup_logger.exception("TopUp create failed: %s", e)
+        await message.answer(" حدث خطأ. حاول لاحقاً.")
+        await state.clear()
+        return
+
+    _entered_txt, _usd_txt = _topup_display(data)
+    summary = (
+        f" <b>طلب شحن جديد</b>\n\n"
+        f" الطلب: <code>#{req_id}</code>\n"
+        f" المستخدم: <a href=\"tg://user?id={user_id}\">{username}</a>\n"
+        f" <code>{user_id}</code>\n"
+        f" المبلغ المطلوب: <b>{_entered_txt} ({_usd_txt})</b>\n"
+        f" طريقة الدفع: <b>{pm_name}</b>\n\n"
+        f" راجع السند واختر الإجراء:"
+    )
+
+    for admin_id in _get_admin_ids_topup():
+        try:
+            # إرسال الصورة أولاً (بدون أزرار)
+            await message.bot.send_photo(
+                chat_id=admin_id,
+                photo=file_id,
+            )
+            # إرسال النص مع الأزرار (هذا هو الإشعار الذي سيرن بقوة)
+            await message.bot.send_message(
+                chat_id=admin_id,
+                text=summary,
+                parse_mode="HTML",
+                reply_markup=_admin_topup_keyboard(req_id),
+            )
+        except Exception as e:
+            _topup_logger.warning("Admin %s notify failed: %s", admin_id, e)
+
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    await message.answer(
+        f" <b>تم إرسال طلبك بنجاح!</b>\n\n"
+        f" رقم الطلب: <code>#{req_id}</code>\n"
+        f" المبلغ: <b>{_entered_txt} ({_usd_txt})</b>\n\n"
+        f" <i>سيتم مراجعة الحوالة والتأكيد خلال دقائق.</i>\n"
+        f" <i>ستصلك رسالة عند الموافقة.</i>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=" عرض الملف الشخصي", callback_data="profile", style="primary")]
+        ])
+    )
+    await state.clear()

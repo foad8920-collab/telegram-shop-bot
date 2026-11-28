@@ -1,0 +1,814 @@
+from aiogram import BaseMiddleware, Router, F
+from aiogram.types import CallbackQuery, Message, TelegramObject
+from aiogram.enums.chat_type import ChatType
+from aiogram.fsm.context import FSMContext
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+
+import asyncio
+import datetime
+from html import escape as _esc
+from typing import Any, Awaitable, Callable, Dict
+
+from bot.database.methods import (
+    select_max_role_id, create_user, check_role_cached, check_user,
+    select_user_operations_total, select_user_items, check_user_cached,
+    set_user_language
+)
+from bot.database.methods.read import get_cart_count, invalidate_user_cache
+from bot.database.methods.lazy_queries import query_user_operations_history
+from bot.handlers.other import check_sub_channel, _parse_channel_username
+from bot.keyboards import main_menu, back, profile_keyboard, check_sub, language_menu
+from bot.keyboards.inline import profile_keyboard_async, welcome_after_check_keyboard
+from bot.misc import EnvKeys
+from bot.misc.metrics import get_metrics
+from bot.i18n import localize, set_current_locale, set_user_cache_locale, SUPPORTED_LOCALES
+from bot.logger_mesh import logger
+
+router = Router()
+NL = chr(10)
+
+
+async def _build_welcome_text(user_id: int, first_name: str = "") -> str:
+    """Build a rich welcome message with user stats (unicode-safe)."""
+    from bot.database.main import Database as _DB
+    from bot.database.models.main import User as _User, BoughtGoods as _Bought
+    from sqlalchemy import select as _select, func as _func
+
+    # Unicode codepoints (safe from PowerShell stripping)
+    EMOJI_STAR = chr(0x1F31F)       # star
+    EMOJI_DIAMOND = chr(0x1F48E)    # diamond
+    EMOJI_GIFT = chr(0x1F381)       # gift
+    EMOJI_ROCKET = chr(0x1F680)     # rocket
+    EMOJI_WAVE = chr(0x1F44B)       # wave
+    SEPARATOR = chr(0x2501) * 18    # heavy horizontal line
+
+    balance_str = "0.00"
+    balance_extra = ""
+    purchases_count = 0
+
+    try:
+        async with _DB().session() as session:
+            user = (await session.execute(
+                _select(_User).where(_User.telegram_id == user_id)
+            )).scalar_one_or_none()
+            if user is not None and user.balance is not None:
+                balance_str = f"{user.balance:.2f}"
+                try:
+                    from decimal import Decimal as _wD, ROUND_CEILING as _wCEIL, ROUND_HALF_UP as _wHALF
+                    from bot.database.methods.transactions import get_currency_rates as _wrates_fn
+                    _wrates = await _wrates_fn()
+                    _wyer_v = (_wD(str(user.balance)) * _wD(str(_wrates.get('usd_to_yer') or 535))).quantize(_wD('1'), rounding=_wHALF)
+                    _wsar_v = (_wD(str(_wyer_v)) / _wD(str(_wrates.get('sar_to_yer') or 140))).quantize(_wD('0.01'), rounding=_wCEIL)
+                    balance_extra = NL + f"\U0001F1F8\U0001F1E6 {_wsar_v} ريال سعودي | Saudi riyals" + NL + f"\U0001F1FE\U0001F1EA {_wyer_v} ريال يمني | Yemeni riyals"
+                except Exception:
+                    pass
+
+            purchases_count = await _count_all_purchases(user_id)
+    except Exception:
+        pass
+
+    name = (first_name or "").strip() or "عزيزي"
+    name_en = (first_name or "").strip()
+    greeting_en = f"Welcome, {name_en}!" if name_en else "Welcome!"
+
+    if purchases_count == 0:
+        purchases_str = "لا توجد مشتريات"
+        purchases_en = "No purchases"
+    elif purchases_count == 1:
+        purchases_str = "مشترى واحد"
+        purchases_en = "1 purchase"
+    elif purchases_count == 2:
+        purchases_str = "مشترى اثنان"
+        purchases_en = "2 purchases"
+    elif purchases_count <= 10:
+        purchases_str = f"{purchases_count} مشتريات"
+        purchases_en = f"{purchases_count} purchases"
+    else:
+        purchases_str = f"{purchases_count} مشترى"
+        purchases_en = f"{purchases_count} purchases"
+
+    lines = [
+        SEPARATOR,
+        f"{EMOJI_STAR} <b>أهلاً بك، {name}!</b> {EMOJI_STAR}",
+        f"{EMOJI_STAR} <b>{greeting_en}</b> {EMOJI_STAR}",
+        SEPARATOR,
+        f"{EMOJI_DIAMOND} رصيدك | Balance: <b>\U0001F1FA\U0001F1F8 {balance_str}$</b>{balance_extra}",
+        f"{EMOJI_GIFT} مشترياتك | Purchases: <b>{purchases_str} | {purchases_en}</b>",
+        SEPARATOR,
+        "",
+        f"{EMOJI_ROCKET} <i>اختر من القائمة أدناه | Choose from the menu below:</i>",
+    ]
+    return NL.join(lines)
+
+
+async def _count_all_purchases(user_id: int) -> int:
+    """Count total purchases across ALL sources (general + suppliers + local)."""
+    from bot.database.main import Database as _DB3
+    from bot.database.models.main import (
+        BoughtGoods as _BG2,
+        SupplierOrder as _SO2,
+        LocalSubscriptionOrder as _LO2,
+    )
+    from sqlalchemy import select as _sel2, func as _fn2
+
+    total = 0
+    try:
+        async with _DB3().session() as _sess:
+            r1 = await _sess.execute(
+                _sel2(_fn2.count()).select_from(_BG2).where(_BG2.buyer_id == user_id)
+            )
+            total += int(r1.scalar() or 0)
+
+            r2 = await _sess.execute(
+                _sel2(_fn2.count()).select_from(_SO2).where(_SO2.user_id == user_id)
+            )
+            total += int(r2.scalar() or 0)
+
+            r3 = await _sess.execute(
+                _sel2(_fn2.count()).select_from(_LO2).where(_LO2.user_id == user_id)
+            )
+            total += int(r3.scalar() or 0)
+    except Exception:
+        pass
+
+    return total
+
+
+async def _ensure_user(user_id: int, tg_lang: str | None = None) -> dict | None:
+    """Return the user's row, registering them first if it is missing.
+
+    A stale keyboard (or a wiped database) can hand a callback from someone
+    with no row at all; every screen that reads user fields needs the row to
+    exist rather than blowing up on None.
+    """
+    user = await check_user_cached(user_id)
+    if user:
+        return user
+
+    raw_lang = (tg_lang or "").lower()[:2]
+    user_lang = "ar"  # New users are always Arabic
+
+    await create_user(
+        telegram_id=user_id,
+        registration_date=datetime.datetime.now(datetime.timezone.utc),
+        referral_id=None,
+        role=1,
+        language_code=user_lang,
+    )
+    await invalidate_user_cache(user_id)
+    set_user_cache_locale(user_id, user_lang)
+    set_current_locale(user_lang)
+    return await check_user_cached(user_id)
+
+
+def _updates_channel_username() -> str | None:
+    """Updates channel first, old channel only as a fallback if updates is not set."""
+    from bot.misc.services.updates_channel import parse_updates_channel_username as _parse_updates
+    return _parse_updates() or _parse_channel_username()
+
+
+def _channel_chat_id(channel_username: str) -> int | str:
+    """Resolve the chat id to query for the subscription check.
+
+    CHANNEL_ID wins when set (private channels have no username to address), but
+    a non-numeric value in the env must not take the handler down with it.
+    """
+    raw = EnvKeys.UPDATES_CHANNEL_ID or EnvKeys.CHANNEL_ID
+    if raw:
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            logger.warning("CHANNEL_ID=%r is not a valid chat id; falling back to @%s", raw, channel_username)
+    return f"@{channel_username}"
+
+
+async def _delete_quietly(message: Message) -> None:
+    """Delete a message, tolerating the cases Telegram refuses.
+
+    A message older than 48h, or one in a chat where the bot lost delete rights,
+    raises â€” and that must not abort a handler that already did its real work.
+    """
+    try:
+        await message.delete()
+    except (TelegramBadRequest, TelegramForbiddenError) as e:
+        logger.debug(f"Failed to delete message: {e}")
+
+
+async def _is_subscribed(bot, channel_username: str, user_id: int) -> bool | None:
+    """Whether the user is in the required channel.
+
+    Returns None when the check could not be performed (private channel, bad
+    link, bot not an admin); callers must treat None as "block and retry".
+    """
+    _chat_id = _channel_chat_id(channel_username)
+    try:
+        chat_member = await bot.get_chat_member(
+            chat_id=_chat_id, user_id=user_id
+        )
+    except (TelegramBadRequest, TelegramForbiddenError) as e:
+        logger.warning(f"Channel subscription check failed for user {user_id} in {_chat_id}: {e}")
+        return None
+    except Exception as e:
+        logger.warning(f"Channel subscription check failed for user {user_id} in {_chat_id}: {type(e).__name__}: {e}")
+        return None
+    return await check_sub_channel(chat_member)
+
+
+class SubscriptionGateMiddleware(BaseMiddleware):
+    """Re-check channel membership on every user-router button press.
+
+    Only a verified member (True) passes. False (left/kicked) and None
+    (check failed) are blocked with the join gate, exactly like /start.
+    The check button itself ("sub_channel_done") is exempt: it is the
+    only way back in after subscribing. The language buttons
+    ("choose_language" and "set_lang:*") are exempt too, so a new user
+    can switch to English before joining; the language handler itself
+    re-checks the subscription before showing the menu.
+    """
+
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: Dict[str, Any],
+    ) -> Any:
+        if not isinstance(event, CallbackQuery):
+            return await handler(event, data)
+        if event.data in ("sub_channel_done", "choose_language") or event.data.startswith("set_lang:"):
+            return await handler(event, data)
+        channel_username = _updates_channel_username()
+        if not channel_username:
+            return await handler(event, data)
+        subscribed = await _is_subscribed(
+            event.bot, channel_username, event.from_user.id
+        )
+        if subscribed is True:
+            return await handler(event, data)
+        # The gate follows the user's chosen language (Arabic by
+        # default); it is no longer forced to Arabic.
+        try:
+            await event.answer(localize("subscribe.prompt"), show_alert=True)
+        except Exception as e:
+            logger.debug(f"Gate middleware could not answer callback: {e}")
+        try:
+            await event.message.edit_text(
+                localize("subscribe.prompt"),
+                reply_markup=check_sub(channel_username),
+            )
+        except Exception as e:
+            logger.debug(f"Gate middleware could not edit message: {e}")
+        return None
+
+
+@router.message(F.text == "/test_updates")
+async def test_updates_channel(message: Message):
+    """Owner-only test post to the updates channel. Not for customers."""
+    if message.chat.type != ChatType.PRIVATE:
+        return
+    if message.from_user.id != EnvKeys.OWNER_ID:
+        return
+    from bot.misc.services.updates_channel import send_update as _send_update
+    ok = await _send_update(
+        message.bot,
+        "تم ربط قناة التحديثات بنجاح. ستظهر إشعارات المنتجات هنا."
+    )
+    await message.answer(
+        "Test post sent to the updates channel."
+        if ok
+        else "Test post failed. Check the bot is admin in the channel and UPDATES_CHANNEL_URL is set in Render."
+    )
+
+
+@router.message(F.text.startswith('/start'))
+async def start(message: Message, state: FSMContext):
+    """
+    Handle /start:
+    - Ensure user exists (register if new)
+    - (Optional) Check channel subscription
+    - Show the main menu
+    """
+    if message.chat.type != ChatType.PRIVATE:
+        return
+
+    user_id = message.from_user.id
+    await state.clear()
+
+    role_data = await check_role_cached(user_id)
+
+    if role_data == 0:
+        owner_max_role = await select_max_role_id()
+        user_role = owner_max_role if user_id == EnvKeys.OWNER_ID else 1
+
+        referral_id = None
+        parts = message.text.split(maxsplit=1)
+        if len(parts) > 1:
+            payload = parts[1].strip()
+            if payload.isdigit() and payload != str(user_id):
+                candidate = int(payload)
+                if await check_user(candidate) is not None:
+                    referral_id = candidate
+
+        # registration_date is DateTime
+        raw_lang = (message.from_user.language_code or "").lower()[:2]
+        user_lang = "ar"  # New users are always Arabic
+
+        await create_user(
+            telegram_id=int(user_id),
+            registration_date=datetime.datetime.now(datetime.timezone.utc),
+            referral_id=referral_id,
+            role=user_role,
+            language_code=user_lang,
+        )
+
+        await invalidate_user_cache(user_id)
+        set_user_cache_locale(user_id, user_lang)
+        set_current_locale(user_lang)
+        from bot.middleware.security import invalidate_auth_caches
+        invalidate_auth_caches(user_id)
+
+        metrics = get_metrics()
+        if metrics:
+            metrics.track_event("registration", user_id)
+
+        # Re-read (now cached) so the menu reflects the freshly assigned role.
+        role_data = await check_role_cached(user_id)
+
+    channel_username = _updates_channel_username()
+
+    # Mandatory subscription check. Only True opens the bot; False or None (check failed) blocks entry.
+    if channel_username:
+        subscribed = await _is_subscribed(message.bot, channel_username, user_id)
+        if subscribed is not True:
+            await message.answer(localize("subscribe.prompt"), reply_markup=check_sub(channel_username))
+            await _delete_quietly(message)
+            return
+
+    _deep = None
+    _parts = (message.text or "").split(maxsplit=1)
+    if len(_parts) > 1:
+        _payload = _parts[1].strip()
+        if _payload.startswith("local_"):
+            if await _send_local_detail_from_start(message, _payload):
+                return
+        if _payload.startswith("sv_"):
+            try:
+                _sv = _payload.split("_")
+                _deep = (int(_sv[1]), int(_sv[2]))
+            except Exception:
+                _deep = None
+    if _deep is not None:
+        try:
+            from bot.database.main import Database as _DB
+            from bot.database.models.main import SupplierProduct as _SP
+            from bot.handlers.user.supplier_products import InlineKeyboardMarkup as _IKM, InlineKeyboardButton as _IKB, format_price_arabic_async as _fpa
+            async with _DB().session() as _sess:
+                _prod = await _sess.get(_SP, _deep[1])
+                if _prod is not None and _prod.supplier_id == _deep[0] and _prod.is_visible is not False:
+                    _name = _prod.name or ""
+                    _available = _prod.is_available and (_prod.is_unlimited or (_prod.stock or 0) > 0)
+                    if _available:
+                        _stock_text = "غير محدود" if _prod.is_unlimited else str(_prod.stock or 0)
+                        _status = f" <b>متوفر</b> (المخزون: {_stock_text})"
+                    else:
+                        _status = " <b>نفدت الكمية</b>"
+                    _desc = (_prod.description or "").strip()
+                    if len(_desc) > 500:
+                        _desc = _desc[:500] + "..."
+                    _lines = [f" <b>{_name}</b>", ""]
+                    if _desc:
+                        _lines.append(f" {_desc}")
+                        _lines.append("")
+                    _lines.append(await _fpa(_prod.selling_price or 0))
+                    _lines.append(f" {_status}")
+                    _text = chr(10).join(_lines)
+                    if getattr(_prod, "show_in_local", False):
+                        _back_cb = "shop_local"
+                    elif _prod.category and _prod.category.strip():
+                        _back_cb = f"sv_cat:{_deep[0]}:{_prod.category}"
+                    else:
+                        _back_cb = f"shop_supplier_{_deep[0]}"
+                    if _available:
+                        _markup = _IKM(inline_keyboard=[
+                            [_IKB(text=" شراء الآن", callback_data=f"sv_buy:{_deep[0]}:{_deep[1]}", style="success")],
+                            [_IKB(text=" رجوع", callback_data=_back_cb, style="primary")],
+                        ])
+                    else:
+                        _markup = _IKM(inline_keyboard=[
+                            [_IKB(text=" رجوع", callback_data=_back_cb, style="primary")],
+                        ])
+                    await message.answer(_text, parse_mode="HTML", reply_markup=_markup)
+                    await _delete_quietly(message)
+                    await state.clear()
+                    return
+        except Exception as _de:
+            import logging as _lg
+            _lg.getLogger(__name__).warning("Deep link failed, falling back to menu: %s", _de)
+    markup = await main_menu(role=role_data, channel=channel_username, helper=EnvKeys.HELPER_ID)
+
+    # Rich welcome message
+    welcome_text = await _build_welcome_text(user_id, message.from_user.first_name or "")
+
+    await message.answer(welcome_text, reply_markup=markup, parse_mode="HTML")
+    await _delete_quietly(message)
+    await state.clear()
+
+
+@router.callback_query(F.data == "back_to_menu")
+async def back_to_menu_callback_handler(call: CallbackQuery, state: FSMContext):
+    """
+    Return user to the main menu with rich welcome.
+    """
+    user_id = call.from_user.id
+    await _ensure_user(user_id)
+
+    role = await check_role_cached(user_id) or 0
+
+    channel_username = _updates_channel_username()
+
+    markup = await main_menu(role=role, channel=channel_username, helper=EnvKeys.HELPER_ID)
+
+    # Rich welcome
+    first_name = ""
+    try:
+        first_name = call.from_user.first_name or ""
+    except Exception:
+        pass
+
+    welcome_text = await _build_welcome_text(user_id, first_name)
+
+    # DEBUG ENABLED
+    try:
+        from bot.logger_mesh import logger as _lgr
+        _lgr.info(f"WELCOME: user_id={user_id} name={first_name}")
+        _lgr.info(f"WELCOME text preview: {welcome_text[:150] if welcome_text else 'EMPTY'}")
+        await call.message.edit_text(welcome_text, reply_markup=markup, parse_mode="HTML")
+    except Exception as _e:
+        from bot.logger_mesh import logger as _lgr
+        import traceback
+        _lgr.error(f"WELCOME FAILED: {type(_e).__name__}: {_e}")
+        _lgr.error(f"TRACEBACK: {traceback.format_exc()}")
+        # fallback
+        try:
+            await call.message.edit_text(localize("menu.title"), reply_markup=markup)
+        except Exception as _e2:
+            _lgr.error(f"FALLBACK FAILED: {_e2}")
+    await state.clear()
+
+
+@router.callback_query(F.data.startswith("back:"))
+async def back_to_menu_prefixed_handler(call: CallbackQuery, state: FSMContext):
+    """Unified handler for prefixed back buttons (back:profile, back:admin, etc.).
+
+    Behaves identically to back_to_menu.
+    """
+    try:
+        await back_to_menu_callback_handler(call, state)
+    except Exception:
+        # fallback: reset to main menu without edit
+        await call.answer()
+        await state.clear()
+
+
+@router.callback_query(F.data == "choose_language")
+async def choose_language_callback_handler(call: CallbackQuery, state: FSMContext):
+    """
+    Show language selection options (ar, en).
+    """
+    user_id = call.from_user.id
+    await _ensure_user(user_id, tg_lang=call.from_user.language_code)
+    await call.message.edit_text(localize("language.select"), reply_markup=language_menu(), parse_mode="HTML")
+    await state.clear()
+
+
+@router.callback_query(F.data.startswith("set_lang:"))
+async def set_language_callback_handler(call: CallbackQuery, state: FSMContext):
+    """
+    Save chosen language and immediately re-render in the new language.
+    """
+    user_id = call.from_user.id
+    lang = call.data.split(":")[1].strip().lower()
+    if lang not in SUPPORTED_LOCALES:
+        lang = "ar"
+
+    await set_user_language(user_id, lang)
+    set_user_cache_locale(user_id, lang)
+    set_current_locale(lang)
+
+    await call.answer(localize("language.changed"))
+
+    channel_username = _updates_channel_username()
+    if channel_username:
+        # A new user who has not joined yet must see the gate again
+        # (in the language just chosen), never the menu.
+        subscribed = await _is_subscribed(call.bot, channel_username, user_id)
+        if subscribed is not True:
+            await call.message.edit_text(
+                localize("subscribe.prompt"),
+                reply_markup=check_sub(channel_username),
+            )
+            await state.clear()
+            return
+
+    role = await check_role_cached(user_id) or 0
+    markup = await main_menu(role=role, channel=channel_username, helper=EnvKeys.HELPER_ID)
+    await call.message.edit_text(localize("menu.title"), reply_markup=markup)
+    await state.clear()
+
+
+@router.callback_query(F.data == "rules")
+async def rules_callback_handler(call: CallbackQuery, state: FSMContext):
+    """
+    Show active bot rules from the database, falling back to ENV RULES.
+    """
+    from bot.database.main import Database as _DB
+    from bot.database.models.main import BotRule as _BotRule
+    from sqlalchemy import select as _select
+
+    rules_text = ""
+    try:
+        async with _DB().session() as session:
+            result = await session.execute(
+                _select(_BotRule).where(_BotRule.is_active == True).order_by(_BotRule.sort_order, _BotRule.id)
+            )
+            rules = list(result.scalars().all())
+            if rules:
+                lines = []
+                for i, r in enumerate(rules, start=1):
+                    lines.append(f"{i}. {_esc((r.text or '').strip())}")
+                rules_text = " القوانين" + NL + NL + (NL + NL).join(lines)
+    except Exception:
+        rules_text = ""
+    if not rules_text:
+        rules_text = EnvKeys.RULES
+    if rules_text:
+        if len(rules_text) > 4000:
+            rules_text = rules_text[:3990] + "..."
+        await call.message.edit_text(rules_text, reply_markup=back("back_to_menu"))
+    else:
+        await call.answer(localize("rules.not_set"))
+    await state.clear()
+
+
+@router.callback_query(F.data == "profile")
+async def profile_callback_handler(call: CallbackQuery, state: FSMContext):
+    """
+    Send profile info (balance, purchases count, id, etc.).
+    """
+    user_id = call.from_user.id
+    tg_user = call.from_user
+    user_info = await _ensure_user(user_id)
+    if not user_info:
+        await call.answer(localize("errors.something_wrong"), show_alert=True)
+        return
+
+    balance = user_info.get('balance')
+    overall_balance, items, cart_count = await asyncio.gather(
+        select_user_operations_total(user_id),
+        _count_all_purchases(user_id),
+        get_cart_count(user_id),
+    )
+    referral = EnvKeys.REFERRAL_PERCENT
+
+    # Use dynamic keyboard for the user's current locale
+    try:
+        from bot.i18n import get_user_locale as _get_locale
+        _locale = _get_locale(user_id) or "ar"
+    except Exception:
+        _locale = "ar"
+
+    try:
+        markup = await profile_keyboard_async(
+            referral, items, cart_count=cart_count, locale=_locale,
+        )
+    except Exception as _e:
+        from bot.logger_mesh import logger as _logger
+        _logger.warning("profile_keyboard_async failed: %s", _e)
+        markup = profile_keyboard(referral, items, cart_count=cart_count)
+    # Balance in 3 currencies (USD, SAR, YER) - SAR derived from YER like subscriptions
+    try:
+        from decimal import Decimal as _bD, ROUND_CEILING as _bCEIL, ROUND_HALF_UP as _bHALF
+        from bot.database.methods.transactions import get_currency_rates as _brates_fn, convert_price as _bconv_fn
+        _brates = await _brates_fn()
+        _bbal = balance if balance is not None else 0
+        _bprices = _bconv_fn(_bbal, _brates)
+        _busd = f"${_bprices['usd']}"
+        _byer_v = (_bD(str(_bbal)) * _bD(str(_brates.get('usd_to_yer') or 535))).quantize(_bD('1'), rounding=_bHALF)
+        _bsar_v = (_bD(str(_byer_v)) / _bD(str(_brates.get('sar_to_yer') or 140))).quantize(_bD('0.01'), rounding=_bCEIL)
+        _bsar = f"\U0001F1F8\U0001F1E6 {_bsar_v} ريال سعودي"
+        _byer = f"\U0001F1FE\U0001F1EA {_byer_v} ريال يمني"
+    except Exception:
+        _busd = f"${balance if balance is not None else 0}"
+        _bsar = None
+        _byer = None
+    _balance_lines = f" الرصيد: <b>\U0001F1FA\U0001F1F8 {_busd}</b>" + chr(10)
+    if _bsar:
+        _balance_lines += f" الرصيد: <b>{_bsar}</b>" + chr(10)
+    if _byer:
+        _balance_lines += f" الرصيد: <b>{_byer}</b>" + chr(10)
+    text = (
+        f"{localize('profile.caption', name=_esc(tg_user.first_name or ''), id=user_id)}\n"
+        f"{localize('profile.id', id=user_id)}\n"
+        f"{_balance_lines}"
+
+        f"{localize('profile.purchased_count', count=items)}"
+    )
+    try:
+        await call.message.edit_text(text, reply_markup=markup, parse_mode='HTML')
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
+    await state.clear()
+
+
+def _build_check_welcome_text(first_name: str = "") -> str:
+    """One-time welcome after the channel check passes.
+
+    Dedicated welcome (not the /start stats welcome): what the store
+    offers, how to pay, and the next step. Emoji as unicode escapes
+    only, so pasting never strips them.
+    """
+    name = (first_name or "").strip() or "عزيزي"
+    name_en = (first_name or "").strip()
+    greeting_en = f"Welcome, {name_en}!" if name_en else "Welcome!"
+    lines = [
+        "\U0001F1FE\U0001F1EA <b>منصة اليمن الإلكترونية | Yemen Platform</b> \U0001F6D2",
+        f"أهلاً بك، {name}! \U0001F44B",
+        f"{greeting_en} \U0001F44B",
+        "",
+        "وجهتك الأولى للاشتراكات الرقمية والذكاء الاصطناعي في اليمن والعالم \u26A1",
+        "Your first destination for digital subscriptions and AI, in Yemen and worldwide \u26A1",
+        "",
+        "\u2728 <b>خدماتنا المميزة | Our featured services:</b>",
+        "\U0001F916 اشتراكات الذكاء الاصطناعي (ChatGPT Plus \u2022 Gemini وغيرها)",
+        "\U0001F916 AI subscriptions (ChatGPT Plus \u2022 Gemini and more)",
+        "\U0001F3A8 أدوات التصميم والمونتاج (Canva Pro وغيرها)",
+        "\U0001F3A8 Design and editing tools (Canva Pro and more)",
+        "\U0001F3AC باقات وحسابات رقمية متنوعة بأسعار مخفضة",
+        "\U0001F3AC Various digital plans and accounts at discounted prices",
+        "",
+        "\U0001F4B3 <b>طرق الدفع | Payment methods:</b>",
+        "\U0001F3E6 بنك الكريمي (ريال يمني YER \u2022 سعودي SAR \u2022 دولار USD)",
+        "\U0001F3E6 Kuraimi Bank (Yemeni riyal YER \u2022 Saudi riyal SAR \u2022 US dollar USD)",
+        "\U0001F4F1 المحافظ الإلكترونية: محفظة جيب | موبايل موني",
+        "\U0001F4F1 E-wallets: Jeeb wallet | Mobile Money",
+        "\U0001F4B0 بينانس والعملات الرقمية | Binance and cryptocurrency",
+        "",
+        "\U0001F680 تفعيل سريع | \U0001F91D مصداقية وأمان | \U0001F4AC دعم فني متواصل",
+        "\U0001F680 Fast activation | \U0001F91D Trust and security | \U0001F4AC Ongoing technical support",
+        "",
+        "\U0001F447 اضغط زر <b>\u00ABالدخول إلى الاشتراكات\u00BB</b> بالأسفل، واختر اشتراكك وادفع بإحدى الطرق أعلاه.",
+        "\U0001F447 Tap the <b>\u00ABEnter subscriptions\u00BB</b> button below, choose your subscription and pay with one of the methods above.",
+    ]
+    return NL.join(lines)
+
+
+@router.callback_query(F.data == "sub_channel_done")
+async def check_sub_to_channel(call: CallbackQuery, state: FSMContext):
+    """
+    Re-check channel subscription after user clicks "Check".
+    """
+    user_id = call.from_user.id
+    channel_username = _updates_channel_username()
+    helper = EnvKeys.HELPER_ID
+
+    if channel_username:
+        # Mandatory check: only True opens the bot; False or None (check unavailable) blocks entry.
+        if await _is_subscribed(call.bot, channel_username, user_id) is True:
+            await _ensure_user(user_id)
+            welcome_text = _build_check_welcome_text(call.from_user.first_name or "")
+            await call.message.edit_text(
+                welcome_text,
+                reply_markup=welcome_after_check_keyboard(),
+                parse_mode="HTML",
+            )
+            await state.clear()
+            return
+
+    await call.answer(localize("subscribe.prompt"), show_alert=True)
+
+
+# --- Operation History ---
+
+@router.callback_query(F.data == "operation_history")
+async def operation_history_handler(call: CallbackQuery, state: FSMContext):
+    user_id = call.from_user.id
+    await _show_operations_page(call, state, user_id, 0)
+
+
+@router.callback_query(F.data.startswith("ops-page_"))
+async def navigate_operations(call: CallbackQuery, state: FSMContext):
+    try:
+        page = int(call.data.split("_")[1])
+    except (ValueError, IndexError):
+        await call.answer(localize("errors.pagination_invalid"))
+        return
+    await _show_operations_page(call, state, call.from_user.id, page)
+
+
+async def _show_operations_page(call: CallbackQuery, state: FSMContext, user_id: int, page: int):
+    from functools import partial
+    from bot.misc import LazyPaginator
+
+    paginator = LazyPaginator(partial(query_user_operations_history, user_id), per_page=10)
+    items = await paginator.get_page(page)
+    total_pages = await paginator.get_total_pages()
+
+    if not items:
+        await call.message.edit_text(
+            localize("history.title") + "\n\n" + localize("history.empty"),
+            reply_markup=back("profile"),
+        )
+        return
+
+    lines = [localize("history.title"), ""]
+    for op in items:
+        op_type = op['type']
+        amount = op['amount']
+        date = op['date']
+        date_str = str(date)[:19] if date else ""
+
+        if op_type == 'topup':
+            lines.append(localize("history.topup", amount=amount, currency=EnvKeys.PAY_CURRENCY))
+        elif op_type == 'purchase':
+            lines.append(localize("history.purchase", amount=amount, currency=EnvKeys.PAY_CURRENCY))
+        elif op_type == 'referral':
+            lines.append(localize("history.referral", amount=amount, currency=EnvKeys.PAY_CURRENCY))
+        lines.append(localize("history.date", date=date_str))
+        lines.append("")
+
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    from aiogram.types import InlineKeyboardButton
+    kb = InlineKeyboardBuilder()
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton(text="◀️", callback_data=f"ops-page_{page - 1}"))
+    if total_pages > 1:
+        nav_buttons.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="dummy_button"))
+    if page < total_pages - 1:
+        nav_buttons.append(InlineKeyboardButton(text="▶️", callback_data=f"ops-page_{page + 1}"))
+    if nav_buttons:
+        kb.row(*nav_buttons)
+    kb.row(InlineKeyboardButton(text=localize("btn.back"), callback_data="profile"))
+
+    await call.message.edit_text("\n".join(lines), reply_markup=kb.as_markup())
+
+
+async def _send_local_detail_from_start(message, payload: str) -> bool:
+    try:
+        _lid = int(payload.split("_", 1)[1])
+    except Exception:
+        return False
+    try:
+        from bot.database.main import Database as _LDB
+        from bot.database.models.main import LocalSubscription as _LSUB
+        from sqlalchemy import select as _lsel
+        from sqlalchemy.orm import selectinload as _lload
+        async with _LDB().session() as _lsess:
+            _lres = await _lsess.execute(_lsel(_LSUB).options(_lload(_LSUB.codes)).where(_LSUB.id == _lid))
+            _lsub = _lres.scalar_one_or_none()
+            if _lsub is None:
+                await message.answer("هذا الاشتراك لم يعد متوفرًا.")
+                return False
+            _lname_raw = _lsub.name or ""
+            _ldesc_raw = _lsub.description or "لا يوجد وصف."
+            _lprice = _lsub.price
+            _lqty = int(_lsub.sellable_quantity or 0)
+            _lactive = bool(_lsub.is_active)
+    except Exception:
+        return False
+    if not _lactive:
+        await message.answer("هذا الاشتراك لم يعد متوفرًا.")
+        return False
+    if _lqty <= 0:
+        await message.answer("نفدت الكمية من هذا الاشتراك.")
+        return False
+    import html as _lhtml
+    _lname = _lhtml.escape(_lname_raw, quote=False)
+    _ldesc = _lhtml.escape(_ldesc_raw, quote=False)
+    try:
+        from bot.database.methods.transactions import get_currency_rates as _lrates_fn, convert_price as _lconv_fn
+        _lrates = await _lrates_fn()
+        _lprices = _lconv_fn(_lprice, _lrates)
+        _lusd = f"${_lprices['usd']}"
+        _lsar = f"{_lprices['sar']} ريال سعودي"
+        _lyer = f"{_lprices['yer']} ريال يمني"
+    except Exception:
+        _lusd = f"${_lprice}"
+        _lsar = None
+        _lyer = None
+    _lprice_lines = f" السعر: <b>{_lusd}</b>" + chr(10)
+    if _lsar:
+        _lprice_lines += f" السعر: <b>{_lsar}</b>" + chr(10)
+    if _lyer:
+        _lprice_lines += f" السعر: <b>{_lyer}</b>" + chr(10)
+    _ltext = (f" <b>{_lname}</b>" + chr(10) + chr(10) + f" {_ldesc}" + chr(10) + chr(10) + _lprice_lines + f" المتوفر: <b>{_lqty}</b>" + chr(10))
+    try:
+        from aiogram.types import InlineKeyboardButton as _LKB, InlineKeyboardMarkup as _LKM
+        _lmarkup = _LKM(inline_keyboard=[
+            [_LKB(text=" شراء الآن", callback_data=f"local_buy:{_lid}", style="success")],
+            [_LKB(text=" رجوع", callback_data="shop_local", style="primary")],
+        ])
+        await message.answer(_ltext, parse_mode="HTML", reply_markup=_lmarkup)
+        return True
+    except Exception:
+        return False

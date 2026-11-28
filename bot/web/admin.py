@@ -6,6 +6,11 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
 
 from sqladmin import Admin, BaseView, ModelView, expose, action
+from sqladmin.filters import (
+    AllUniqueStringValuesFilter,
+    BooleanFilter,
+    ForeignKeyFilter,
+)
 from sqladmin.authentication import AuthenticationBackend
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -813,8 +818,8 @@ class UserActivityAdmin(ModelView, model=UserActivity):
     ]
     column_default_sort = (UserActivity.created_at, True)
     column_filters = [
-        UserActivity.action_type,
-        UserActivity.target_type,
+        AllUniqueStringValuesFilter(UserActivity.action_type, title="الإجراء"),
+        AllUniqueStringValuesFilter(UserActivity.target_type, title="نوع الهدف"),
     ]
 
     can_create = False
@@ -1382,8 +1387,8 @@ class SupplierOrderAdmin(ModelView, model=SupplierOrder):
     ]
     column_default_sort = [("created_at", True)]
     column_filters = [
-        SupplierOrder.supplier_id,
-        SupplierOrder.status,
+        ForeignKeyFilter(SupplierOrder.supplier_id, Supplier.name, title="المورد"),
+        AllUniqueStringValuesFilter(SupplierOrder.status, title="الحالة"),
     ]
     column_labels = {
         "supplier_id": "المورد",
@@ -1450,8 +1455,8 @@ class SupplierSyncLogAdmin(ModelView, model=SupplierSyncLog):
     ]
     column_default_sort = [("started_at", True)]
     column_filters = [
-        SupplierSyncLog.supplier_id,
-        SupplierSyncLog.status,
+        ForeignKeyFilter(SupplierSyncLog.supplier_id, Supplier.name, title="المورد"),
+        AllUniqueStringValuesFilter(SupplierSyncLog.status, title="الحالة"),
     ]
     column_labels = {
         "supplier_id": "المورد",
@@ -1529,11 +1534,11 @@ class SupplierProductAdmin(ModelView, model=SupplierProduct):
     ]
     column_default_sort = [("id", True)]
     column_filters = [
-        SupplierProduct.supplier_id,
-        SupplierProduct.category,
-        SupplierProduct.is_visible,
-        SupplierProduct.is_available,
-        SupplierProduct.show_in_local,
+        ForeignKeyFilter(SupplierProduct.supplier_id, Supplier.name, title="المورد"),
+        AllUniqueStringValuesFilter(SupplierProduct.category, title="الفئة"),
+        BooleanFilter(SupplierProduct.is_visible, title="ظاهر"),
+        BooleanFilter(SupplierProduct.is_available, title="متوفر"),
+        BooleanFilter(SupplierProduct.show_in_local, title="في المحلية"),
     ]
     column_labels = {
         "supplier_id": "المورد",
@@ -1594,8 +1599,8 @@ class SupplierView(ModelView, model=Supplier):
     ]
     column_default_sort = [("sort_order", False), ("id", False)]
     column_filters = [
-        Supplier.is_active,
-        Supplier.last_sync_status,
+        BooleanFilter(Supplier.is_active, title="مفعّل"),
+        AllUniqueStringValuesFilter(Supplier.last_sync_status, title="حالة المزامنة"),
     ]
     column_labels = {
         "icon_emoji": "الأيقونة",
@@ -1780,9 +1785,9 @@ class LocalSubscriptionView(ModelView, model=LocalSubscription):
     ]
     column_default_sort = [("id", True)]
     column_filters = [
-        LocalSubscription.delivery_type,
-        LocalSubscription.category,
-        LocalSubscription.is_active,
+        AllUniqueStringValuesFilter(LocalSubscription.delivery_type, title="نوع التسليم"),
+        AllUniqueStringValuesFilter(LocalSubscription.category, title="الفئة"),
+        BooleanFilter(LocalSubscription.is_active, title="مفعّل"),
     ]
     page_size = 25
 
@@ -2052,8 +2057,8 @@ class LocalSubscriptionOrderAdmin(ModelView, model=LocalSubscriptionOrder):
     ]
     column_default_sort = [("created_at", True)]
     column_filters = [
-        LocalSubscriptionOrder.status,
-        LocalSubscriptionOrder.payment_type,
+        AllUniqueStringValuesFilter(LocalSubscriptionOrder.status, title="الحالة"),
+        AllUniqueStringValuesFilter(LocalSubscriptionOrder.payment_type, title="طريقة الدفع"),
     ]
     page_size = 25
 
@@ -2131,8 +2136,8 @@ class LocalSubscriptionCodeAdmin(ModelView, model=LocalSubscriptionCode):
     ]
     column_default_sort = [("created_at", True)]
     column_filters = [
-        LocalSubscriptionCode.subscription,
-        LocalSubscriptionCode.is_used,
+        ForeignKeyFilter(LocalSubscriptionCode.subscription_id, LocalSubscription.name, title="الاشتراك"),
+        BooleanFilter(LocalSubscriptionCode.is_used, title="مُستخدَم"),
     ]
     page_size = 50
 

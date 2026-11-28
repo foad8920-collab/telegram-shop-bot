@@ -1,0 +1,1189 @@
+import datetime
+from decimal import Decimal
+from typing import Optional
+
+from sqlalchemy import (
+    Integer, String, BigInteger, ForeignKey, Text, Boolean,
+    DateTime, Numeric, Index, UniqueConstraint, CheckConstraint, func, select
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import relationship, Mapped, mapped_column
+from bot.database.main import Database
+
+
+class Permission:
+    USE             = 1 << 0   #   1 â€” basic access
+    BROADCAST       = 1 << 1   #   2 â€” mass messaging
+    SETTINGS_MANAGE = 1 << 2   #   4 â€” bot settings (maintenance, etc.)
+    USERS_MANAGE    = 1 << 3   #   8 â€” view/block/unblock users, referrals, purchases
+    CATALOG_MANAGE  = 1 << 4   #  16 â€” categories, positions, items/goods CRUD
+    ADMINS_MANAGE   = 1 << 5   #  32 â€” role CRUD, role assignment
+    OWN             = 1 << 6   #  64 â€” owner-only operations
+    STATS_VIEW      = 1 << 7   # 128 â€” statistics, logs, bought-item search
+    BALANCE_MANAGE  = 1 << 8   # 256 â€” top-up / deduct user balance
+    PROMO_MANAGE    = 1 << 9   # 512 â€” promo code CRUD
+
+    @staticmethod
+    def is_subset(perms: int, of: int) -> bool:
+        """True if every bit in `perms` is also set in `of`."""
+        return (perms & ~of) == 0
+
+    @staticmethod
+    def has_any_admin_perm(perms: int) -> bool:
+        """True if `perms` has any permission beyond USE."""
+        return (perms & ~Permission.USE) != 0
+
+    @staticmethod
+    def granted(perms: int, bit: int) -> bool:
+        """True if every bit in `bit` is set in `perms` (same AND semantics as HasPermissionFilter)."""
+        return (perms & bit) == bit
+
+
+class Role(Database.BASE):
+    __tablename__ = 'roles'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[Optional[str]] = mapped_column(String(64), unique=True)
+    default: Mapped[Optional[bool]] = mapped_column(Boolean, default=False, index=True)
+    permissions: Mapped[Optional[int]] = mapped_column(Integer)
+    users: Mapped[list["User"]] = relationship('User', backref='role', lazy='raise')
+
+    def __str__(self):
+        return self.name or ""
+
+    @staticmethod
+    async def insert_roles():
+        roles = {
+            'USER': [Permission.USE],
+            'ADMIN': [Permission.USE, Permission.BROADCAST,
+                      Permission.SETTINGS_MANAGE, Permission.USERS_MANAGE,
+                      Permission.CATALOG_MANAGE, Permission.STATS_VIEW,
+                      Permission.BALANCE_MANAGE, Permission.PROMO_MANAGE],
+            'OWNER': [Permission.USE, Permission.BROADCAST,
+                      Permission.SETTINGS_MANAGE, Permission.USERS_MANAGE,
+                      Permission.CATALOG_MANAGE, Permission.ADMINS_MANAGE,
+                      Permission.OWN, Permission.STATS_VIEW,
+                      Permission.BALANCE_MANAGE, Permission.PROMO_MANAGE],
+        }
+        default_role = 'USER'
+        async with Database().session() as s:
+            for r, perms in roles.items():
+                result = await s.execute(select(Role).filter_by(name=r))
+                role = result.scalars().first()
+                if role is None:
+                    role = Role(name=r)
+                    s.add(role)
+                role.reset_permissions()
+                for perm in perms:
+                    role.add_permission(perm)
+                role.default = (role.name == default_role)
+
+    def add_permission(self, perm):
+        self.permissions |= perm
+
+    def remove_permission(self, perm):
+        self.permissions &= ~perm
+
+    def reset_permissions(self):
+        self.permissions = 0
+
+    def has_permission(self, perm):
+        return self.permissions & perm == perm
+
+    def __repr__(self):
+        return '<Role %r>' % self.name
+
+
+class User(Database.BASE):
+    __tablename__ = 'users'
+    telegram_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    role_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey('roles.id', ondelete="RESTRICT"), default=1, index=True)
+    balance: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    language_code: Mapped[str] = mapped_column(String(10), nullable=False, server_default="ar")
+    referral_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey('users.telegram_id', ondelete="SET NULL"), nullable=True, index=True)
+    registration_date: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+    is_blocked: Mapped[Optional[bool]] = mapped_column(Boolean, default=False, index=True)
+    user_operations: Mapped[list["Operations"]] = relationship(
+        "Operations", back_populates="user_telegram_id", lazy='raise')
+    user_goods: Mapped[list["BoughtGoods"]] = relationship(
+        "BoughtGoods", back_populates="user_telegram_id", lazy='raise')
+
+    __table_args__ = (
+        CheckConstraint('referral_id != telegram_id', name='ck_users_no_self_referral'),
+        Index('ix_users_registration_date', 'registration_date'),
+    )
+
+    referral_earnings_received: Mapped[list["ReferralEarnings"]] = relationship(
+        "ReferralEarnings",
+        foreign_keys="ReferralEarnings.referrer_id",
+        back_populates="referrer",
+        lazy='raise',
+    )
+    referral_earnings_generated: Mapped[list["ReferralEarnings"]] = relationship(
+        "ReferralEarnings",
+        foreign_keys="ReferralEarnings.referral_id",
+        back_populates="referral",
+        lazy='raise',
+    )
+
+    def __str__(self):
+        return str(self.telegram_id)
+
+
+class Categories(Database.BASE):
+    __tablename__ = 'categories'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    items: Mapped[list["Goods"]] = relationship(
+        "Goods", back_populates="category", lazy='raise', passive_deletes=True)
+
+    def __str__(self):
+        return self.name or ""
+
+
+class Goods(Database.BASE):
+    __tablename__ = 'goods'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    category_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey('categories.id', ondelete="CASCADE"), nullable=False, index=True)
+    sale_percent: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), nullable=True)
+    sale_until: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    stackvault_product_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    stackvault_pricing_mode: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    stackvault_pricing_value: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+    stackvault_enabled: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    supplier_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+    supplier_stock: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    supplier_in_stock: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    stock_quantity: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    category: Mapped["Categories"] = relationship("Categories", back_populates="items", lazy='raise')
+    values: Mapped[list["ItemValues"]] = relationship("ItemValues", back_populates="item", lazy='raise', passive_deletes=True)
+
+    prices: Mapped[list["ProductPrices"]] = relationship("ProductPrices", back_populates="item", lazy='raise', passive_deletes=True)
+
+    def __str__(self):
+        return self.name or ""
+
+
+
+class ProductPrices(Database.BASE):
+    __tablename__ = "product_prices"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    item_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("goods.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
+
+    currency: Mapped[str] = mapped_column(
+        String(8),
+        nullable=False
+    )
+
+    amount: Mapped[Decimal] = mapped_column(
+        Numeric(12,2),
+        nullable=False
+    )
+
+    item: Mapped["Goods"] = relationship(
+        "Goods",
+        back_populates="prices",
+        lazy="raise"
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "item_id",
+            "currency",
+            name="uq_product_price_currency"
+        ),
+    )
+
+class ItemValues(Database.BASE):
+    __tablename__ = 'item_values'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    item_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey('goods.id', ondelete="CASCADE"), nullable=False, index=True)
+    value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_infinity: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    item: Mapped["Goods"] = relationship("Goods", back_populates="values", lazy='raise')
+
+    __table_args__ = (
+        UniqueConstraint('item_id', 'value', name='uq_item_value_per_item'),
+        Index('ix_item_values_item_inf', 'item_id', 'is_infinity'),
+    )
+
+    def __str__(self):
+        return f"#{self.id} ({self.item_id})"
+
+
+class BoughtGoods(Database.BASE):
+    __tablename__ = 'bought_goods'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    item_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    buyer_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey('users.telegram_id', ondelete="SET NULL"), nullable=True, index=True)
+    bought_datetime: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+    unique_id: Mapped[int] = mapped_column(BigInteger, nullable=False, unique=True)
+    user_telegram_id: Mapped[Optional["User"]] = relationship(
+        "User", back_populates="user_goods", lazy='raise')
+
+    __table_args__ = (
+        Index('ix_bought_goods_datetime', 'bought_datetime'),
+        Index('ix_bought_goods_buyer_datetime_id', 'buyer_id', 'bought_datetime', 'id'),
+    )
+
+    def __str__(self):
+        return self.item_name or ""
+
+
+class Operations(Database.BASE):
+    __tablename__ = 'operations'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey('users.telegram_id', ondelete="SET NULL"), nullable=True, index=True)
+    operation_value: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    operation_time: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+    user_telegram_id: Mapped[Optional["User"]] = relationship(
+        "User", back_populates="user_operations", lazy='raise')
+
+    __table_args__ = (
+        Index('ix_operations_time', 'operation_time'),
+    )
+
+    def __str__(self):
+        return f"#{self.id}"
+
+
+class Payments(Database.BASE):
+    __tablename__ = "payments"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    external_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    user_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey('users.telegram_id', ondelete="SET NULL"), nullable=True, index=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(8), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint('provider', 'external_id', name='uq_payment_provider_ext'),
+        Index('ix_payments_status_created', 'status', 'created_at'),
+    )
+
+    def __str__(self):
+        return f"{self.provider}:{self.external_id}"
+
+
+class StackVaultOrder(Database.BASE):
+    __tablename__ = "stackvault_orders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.telegram_id", ondelete="CASCADE"), nullable=False, index=True)
+    goods_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("goods.id", ondelete="CASCADE"), nullable=False, index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    order_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class StackVaultPricingSettings(Database.BASE):
+    __tablename__ = "stackvault_pricing_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    default_markup_percentage: Mapped[Decimal] = mapped_column(
+        Numeric(5, 2), nullable=False, server_default="30.00")
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class StackVaultPriceOverride(Database.BASE):
+    __tablename__ = "stackvault_price_overrides"
+
+    product_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    manual_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class ReferralEarnings(Database.BASE):
+    __tablename__ = 'referral_earnings'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    referrer_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey('users.telegram_id', ondelete="CASCADE"), nullable=False, index=True)
+    referral_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey('users.telegram_id', ondelete="CASCADE"), nullable=False, index=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    original_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    referrer: Mapped["User"] = relationship(
+        "User",
+        foreign_keys="ReferralEarnings.referrer_id",
+        back_populates="referral_earnings_received",
+        lazy='raise',
+    )
+    referral: Mapped["User"] = relationship(
+        "User",
+        foreign_keys="ReferralEarnings.referral_id",
+        back_populates="referral_earnings_generated",
+        lazy='raise',
+    )
+
+    __table_args__ = (
+        CheckConstraint('referrer_id != referral_id', name='ck_referral_earnings_no_self_referral'),
+        Index('ix_referral_earnings_referrer_created_id', 'referrer_id', 'created_at', 'id'),
+        Index('ix_referral_earnings_referral_created_id', 'referral_id', 'created_at', 'id'),
+        Index('ix_referral_earnings_pair_created', 'referrer_id', 'referral_id', 'created_at', 'id'),
+    )
+
+    def __str__(self):
+        return f"#{self.id}"
+
+
+class AuditLog(Database.BASE):
+    __tablename__ = 'audit_log'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    timestamp: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+    level: Mapped[str] = mapped_column(String(8), nullable=False, default="INFO")
+    user_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    resource_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    resource_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    details: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    ip_address: Mapped[Optional[str]] = mapped_column(String(45), nullable=True)
+
+    __table_args__ = (
+        Index('ix_audit_log_timestamp', 'timestamp'),
+        Index('ix_audit_log_user_id', 'user_id'),
+        Index('ix_audit_log_action', 'action'),
+    )
+
+    def __repr__(self):
+        return f'<AuditLog {self.action} user={self.user_id} @ {self.timestamp}>'
+
+    def __str__(self):
+        return self.action or ""
+
+
+class PromoCodes(Database.BASE):
+    __tablename__ = 'promo_codes'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    discount_type: Mapped[str] = mapped_column(String(10), nullable=False)  # 'percent' | 'fixed' | 'balance'
+    discount_value: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    scope: Mapped[str] = mapped_column(String(16), nullable=False, server_default='global')
+    max_uses: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # 0 = unlimited
+    current_uses: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    expires_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    category_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey('categories.id', ondelete='SET NULL'), nullable=True, index=True)
+    item_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey('goods.id', ondelete='SET NULL'), nullable=True, index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint("scope IN ('global','category','item')", name='ck_promo_codes_scope'),
+        CheckConstraint('discount_value >= 0', name='ck_promo_discount_nonneg'),
+        CheckConstraint(
+            'category_id IS NULL OR item_id IS NULL',
+            name='ck_promo_single_binding',
+        ),
+        Index('ix_promo_codes_created_id', 'created_at', 'id'),
+    )
+
+    def __str__(self):
+        return self.code or ""
+
+
+def promo_scope_for(category_id: Optional[int], item_id: Optional[int]) -> str:
+    """Derive a promo's scope discriminator from its bindings (item wins).
+
+    Item-first matches the precedence in promo_rule_error.
+    """
+    if item_id is not None:
+        return 'item'
+    if category_id is not None:
+        return 'category'
+    return 'global'
+
+
+class PromoCodeUsages(Database.BASE):
+    __tablename__ = 'promo_code_usages'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    promo_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey('promo_codes.id', ondelete='CASCADE'), nullable=False)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey('users.telegram_id', ondelete='CASCADE'), nullable=False)
+    used_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+    __table_args__ = (UniqueConstraint('promo_id', 'user_id', name='uq_promo_usage_per_user'),)
+
+
+class CartItems(Database.BASE):
+    __tablename__ = 'cart_items'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey('users.telegram_id', ondelete='CASCADE'), nullable=False, index=True)
+    item_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey('goods.id', ondelete='CASCADE'), nullable=False, index=True)
+    promo_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    added_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+    __table_args__ = (
+        UniqueConstraint('user_id', 'item_id', name='uq_cart_item_per_user'),
+        CheckConstraint('quantity > 0', name='ck_cart_items_quantity_positive'),
+    )
+
+    def __str__(self):
+        return f"cart#{self.id} item={self.item_id} x{self.quantity}"
+
+
+class Reviews(Database.BASE):
+    __tablename__ = 'reviews'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey('users.telegram_id', ondelete='CASCADE'), nullable=False, index=True)
+    item_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey('goods.id', ondelete='CASCADE'), nullable=False, index=True)
+    rating: Mapped[int] = mapped_column(Integer, nullable=False)  # 1-5
+    text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+    __table_args__ = (
+        UniqueConstraint('user_id', 'item_id', name='uq_review_per_user_item'),
+        CheckConstraint('rating >= 1 AND rating <= 5', name='ck_review_rating_range'),
+        Index('ix_reviews_item_created_id', 'item_id', 'created_at', 'id'),
+    )
+
+    def __str__(self):
+        return f"item {self.item_id} ({self.rating}âک…)"
+
+
+class StockSubscriptions(Database.BASE):
+    __tablename__ = 'stock_subscriptions'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey('users.telegram_id', ondelete='CASCADE'), nullable=False, index=True)
+    item_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey('goods.id', ondelete='CASCADE'), nullable=False, index=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+    __table_args__ = (
+        UniqueConstraint('user_id', 'item_id', name='uq_stock_sub_per_user_item'),
+    )
+
+    def __str__(self):
+        return f"sub u={self.user_id} item={self.item_id}"
+
+
+async def register_models():
+    """Seed the built-in roles (USER/ADMIN/OWNER)."""
+    await Role.insert_roles()
+
+
+
+
+
+class Supplier(Database.BASE):
+    __tablename__ = 'suppliers'
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    api_url: Mapped[str] = mapped_column(String(255), nullable=False)
+    api_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    profit_margin: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=0)
+    style: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, default='primary')
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+
+    # --- Presentation ---
+    display_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    icon_emoji: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default='0')
+
+    # --- Sync settings ---
+    sync_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default='true')
+    sync_interval_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=240, server_default='240')
+    last_sync_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_sync_status: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    last_sync_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    last_sync_product_count: Mapped[Optional[int]] = mapped_column(Integer, default=0)
+    sync_errors_count: Mapped[Optional[int]] = mapped_column(Integer, default=0)
+
+    # --- Auto purchase settings (future feature) ---
+    auto_purchase_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default='false',
+    )
+    auto_purchase_threshold: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2), nullable=False, default=0, server_default='0',
+    )
+    provider_balance: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2), nullable=True)
+    last_balance_check: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    auto_purchase_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # --- Notes ---
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    def __str__(self):
+        return self.display_name or self.name or ""
+
+
+
+class LocalSubscription(Database.BASE):
+    __tablename__ = 'local_subscriptions'
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    price_yer: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    category: Mapped[str] = mapped_column(String(100), default='عام')
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
+    style: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, default='success')
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+
+    # Delivery configuration
+    delivery_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, default='codes', server_default='codes',
+    )  # codes | invite | manual
+    codes_per_purchase: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default='1',
+    )
+
+    # Type of data to request from buyer for invite/manual delivery:
+    # email | phone | username | telegram_id | text | none
+    invite_field_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, default='email', server_default='email',
+    )
+
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    # Relationship: all codes for this subscription
+    codes: Mapped[list["LocalSubscriptionCode"]] = relationship(
+        "LocalSubscriptionCode",
+        foreign_keys="LocalSubscriptionCode.subscription_id",
+        lazy="selectin",
+        viewonly=True,
+    )
+
+    @property
+    def free_codes_count(self) -> int:
+        """Count of unused codes."""
+        try:
+            return sum(1 for c in self.codes if not c.is_used)
+        except Exception:
+            return 0
+
+    @property
+    def sellable_quantity(self) -> int:
+        """Sellable units based on delivery type."""
+        dt = (self.delivery_type or "codes").lower()
+        if dt == "codes":
+            cpp = max(1, int(self.codes_per_purchase or 1))
+            return self.free_codes_count // cpp
+        return int(self.quantity or 0)
+
+    def __str__(self):
+        return self.name or ""
+
+class BotButton(Database.BASE):
+    __tablename__ = 'bot_buttons'
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    menu_name: Mapped[str] = mapped_column(String(60), default='القائمة الرئيسية', server_default='القائمة الرئيسية')
+    menu_name: Mapped[str] = mapped_column(String(60), default='القائمة الرئيسية', server_default='القائمة الرئيسية')
+    style: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, default='primary')
+    icon_custom_emoji_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    button_text: Mapped[str] = mapped_column(String(100), nullable=False)
+    callback_data: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    url: Mapped[Optional[str]] = mapped_column(String(255))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    def __str__(self):
+        return self.button_text or ""
+
+
+class PaymentMethod(Database.BASE):
+    __tablename__ = 'payment_methods'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    account_info: Mapped[str] = mapped_column(Text, nullable=False)
+    style: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, default='primary')
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+
+    def __str__(self):
+        return self.name or ""
+
+
+# ============================================================
+#  Local Subscriptions  Orders & Codes
+# ============================================================
+
+class LocalSubscriptionOrder(Database.BASE):
+    """Purchase order for a local subscription.
+
+    Flow:
+      pending   -> user created order (waiting for admin or auto-approval)
+      approved  -> admin approved / binance auto-verified
+      rejected  -> admin rejected
+      completed -> content delivered to user
+      cancelled -> user cancelled
+    """
+    __tablename__ = 'local_subscription_orders'
+    __table_args__ = (
+        CheckConstraint('quantity > 0', name='ck_lso_quantity_positive'),
+        Index('idx_lso_user_status', 'user_id', 'status'),
+        Index('idx_lso_status', 'status'),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey('users.telegram_id'), nullable=False)
+    subscription_id: Mapped[int] = mapped_column(BigInteger, ForeignKey('local_subscriptions.id'), nullable=False)
+
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    unit_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    total_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+
+    payment_method_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey('payment_methods.id'), nullable=True)
+    payment_type: Mapped[str] = mapped_column(String(30), nullable=False)  # balance | binance | wallet
+
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default='pending', server_default='pending')
+
+    payment_reference: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    payment_proof_file_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+
+    admin_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    admin_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    decided_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    delivered_content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Buyer-provided data for invite/manual subscriptions (email/phone/etc.)
+    customer_data: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+    # State flags for invite flow (survives bot restart)
+    awaiting_data: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default='false',
+    )
+    awaiting_field_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+
+    subscription: Mapped["LocalSubscription"] = relationship(
+        "LocalSubscription",
+        lazy="joined",
+        foreign_keys=[subscription_id],
+    )
+
+    def __str__(self):
+        return f"Order#{self.id} ({self.status})"
+
+
+class LocalSubscriptionCode(Database.BASE):
+    """One redeemable code/key per subscription unit."""
+    __tablename__ = 'local_subscription_codes'
+    __table_args__ = (
+        Index('idx_lsc_sub_unused', 'subscription_id', 'is_used'),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    subscription_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey('local_subscriptions.id', ondelete='CASCADE'), nullable=False,
+    )
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    is_used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default='false')
+    used_by: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    order_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey('local_subscription_orders.id'), nullable=True,
+    )
+    used_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    subscription: Mapped["LocalSubscription"] = relationship(
+        "LocalSubscription", lazy="joined", foreign_keys=[subscription_id]
+    )
+
+    def __str__(self):
+        preview = (self.content or "")[:30]
+        state = "USED" if self.is_used else "FREE"
+        return f"[{state}] {preview}"
+
+# ============================================================
+#  END Local Subscriptions
+# ============================================================
+
+
+# ============================================================
+#  Supplier Products, Pricing, Orders & Sync Logs
+# ============================================================
+
+class SupplierProduct(Database.BASE):
+    """Cached product from an external supplier (StackVault/Pandora/...)."""
+    __tablename__ = 'supplier_products'
+    __table_args__ = (
+        UniqueConstraint('supplier_id', 'external_id', name='uq_sp_supplier_external'),
+        Index('idx_sp_supplier_visible', 'supplier_id', 'is_visible', 'is_available'),
+        Index('idx_sp_synced', 'last_synced_at'),
+        Index('idx_sp_category', 'supplier_id', 'category'),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    supplier_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey('suppliers.id', ondelete='CASCADE'), nullable=False,
+    )
+    external_id: Mapped[str] = mapped_column(String(100), nullable=False)
+
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    image_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    category: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
+    cost_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    selling_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2), nullable=True)
+    manual_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2), nullable=True)
+    fixed_profit: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2), nullable=False, default=0, server_default='0',
+    )
+    currency: Mapped[Optional[str]] = mapped_column(String(10), default='USD')
+
+    stock: Mapped[Optional[int]] = mapped_column(Integer, default=0)
+    is_unlimited: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    is_available: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_visible: Mapped[bool] = mapped_column(Boolean, default=True)
+    show_in_local: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    raw_data: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    last_synced_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    description_synced_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    def __str__(self):
+        return self.name or ""
+
+
+class SupplierPricingRule(Database.BASE):
+    """Global pricing rules for a supplier (percent/fixed markup)."""
+    __tablename__ = 'supplier_pricing_rules'
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    supplier_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey('suppliers.id', ondelete='CASCADE'), nullable=False, unique=True,
+    )
+
+    markup_percent: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), default=30)
+    markup_fixed: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2), default=0)
+    min_margin_percent: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), default=5)
+    default_fixed_profit: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2), nullable=False, default=0, server_default='0',
+    )
+    min_selling_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2), nullable=True)
+    max_selling_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2), nullable=True)
+    round_to: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), default=0.01)
+
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    def __str__(self):
+        return f"Pricing[{self.supplier_id}] {self.markup_percent}%"
+
+
+class BotRule(Database.BASE):
+    """Bot rules shown to users, managed from the admin panel."""
+    __tablename__ = 'bot_rules'
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    sort_order: Mapped[int] = mapped_column(BigInteger, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    def __str__(self):
+        return (self.text or "")[:50]
+
+
+class SupplierCategoryMarkup(Database.BASE):
+    """Category-specific markup override for a supplier."""
+    __tablename__ = 'supplier_category_markups'
+    __table_args__ = (
+        UniqueConstraint('supplier_id', 'category_keyword', name='uq_scm_supplier_category'),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    supplier_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey('suppliers.id', ondelete='CASCADE'), nullable=False,
+    )
+    category_keyword: Mapped[str] = mapped_column(String(100), nullable=False)
+    markup_percent: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, default=0)
+    fixed_profit: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2), nullable=False, default=0, server_default='0',
+    )
+
+    def __str__(self):
+        return f"{self.category_keyword}: +{self.markup_percent}%"
+
+
+class SupplierPriceOverride(Database.BASE):
+    """A fixed price override for a specific product."""
+    __tablename__ = 'supplier_price_overrides'
+    __table_args__ = (
+        UniqueConstraint('supplier_id', 'external_id', name='uq_spo_supplier_external'),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    supplier_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey('suppliers.id', ondelete='CASCADE'), nullable=False,
+    )
+    external_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    fixed_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    def __str__(self):
+        return f"Override[{self.supplier_id}:{self.external_id}] -> {self.fixed_price}"
+
+
+class SupplierOrder(Database.BASE):
+    """Purchase order for a supplier product (reserved for future automation)."""
+    __tablename__ = 'supplier_orders'
+    __table_args__ = (
+        Index('idx_so_supplier', 'supplier_id', 'created_at'),
+        Index('idx_so_status', 'status'),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    supplier_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey('suppliers.id'), nullable=False,
+    )
+    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    product_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey('supplier_products.id'), nullable=False,
+    )
+
+    external_order_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    quantity: Mapped[Optional[int]] = mapped_column(Integer, default=1)
+
+    cost_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2), nullable=True)
+    selling_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2), nullable=True)
+    profit: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2), nullable=True)
+
+    status: Mapped[Optional[str]] = mapped_column(String(30), default='pending')
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    response_data: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+    completed_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    def __str__(self):
+        return f"SupplierOrder#{self.id} [{self.status}]"
+
+
+class SupplierSyncLog(Database.BASE):
+    """Log entry for each sync operation."""
+    __tablename__ = 'supplier_sync_logs'
+    __table_args__ = (
+        Index('idx_ssl_supplier', 'supplier_id', 'started_at'),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    supplier_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey('suppliers.id', ondelete='CASCADE'), nullable=False,
+    )
+
+    started_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+    finished_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+
+    products_total: Mapped[Optional[int]] = mapped_column(Integer, default=0)
+    products_added: Mapped[Optional[int]] = mapped_column(Integer, default=0)
+    products_updated: Mapped[Optional[int]] = mapped_column(Integer, default=0)
+    products_removed: Mapped[Optional[int]] = mapped_column(Integer, default=0)
+    price_changes: Mapped[Optional[int]] = mapped_column(Integer, default=0)
+
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    details: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+
+    def __str__(self):
+        return f"Sync[{self.supplier_id}] {self.status} @ {self.started_at}"
+
+# ============================================================
+#  END Supplier Models
+# ============================================================
+
+# ============================================================
+#  Support Bot Models (Topics)
+# ============================================================
+class SupportTopic(Database.BASE):
+    """ربط بين user_id و topic_id في مجموعة الدعم."""
+    __tablename__ = 'support_topics'
+    __table_args__ = (
+        Index('idx_support_topic_id', 'topic_id'),
+        Index('idx_support_updated_at', 'updated_at'),
+    )
+
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    topic_id: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
+    
+    user_full_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    user_username: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default='true')
+    
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, 
+        server_default=func.now(), onupdate=func.now()
+    )
+    closed_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    def __str__(self):
+        return f"SupportTopic(user={self.user_id}, topic={self.topic_id})"
+
+# ============================================================
+#  Referral Product Rewards (نظام الإحالة بالمكافآت)
+# ============================================================
+class ReferralProductReward(Database.BASE):
+    """يحتسب كل عملية شراء عبر رابط الإحالة لنفس المنتج."""
+    __tablename__ = 'referral_product_rewards'
+    __table_args__ = (
+        UniqueConstraint('referred_user_id', 'product_name', 
+                        name='uq_rpr_referred_product'),
+        Index('idx_rpr_referrer', 'referrer_id', 'product_name'),
+        Index('idx_rpr_referred', 'referred_user_id'),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    referrer_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    referred_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    product_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    order_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    is_counted: Mapped[bool] = mapped_column(Boolean, default=True, server_default='true')
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    def __str__(self):
+        return f"RewardCount({self.referrer_id}:{self.product_name}:{self.referred_user_id})"
+
+
+class ReferralReward(Database.BASE):
+    """المكافآت التي حصل عليها صاحب الإحالة."""
+    __tablename__ = 'referral_rewards'
+    __table_args__ = (
+        UniqueConstraint('user_id', 'product_name', 'status', 
+                        name='uq_rr_user_product_status'),
+        Index('idx_rr_user', 'user_id', 'status'),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    product_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    reward_type: Mapped[str] = mapped_column(String(50), default='free_item', server_default='free_item')
+    status: Mapped[str] = mapped_column(String(50), default='pending', server_default='pending')
+    order_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    delivered_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    def __str__(self):
+        return f"Reward({self.user_id}:{self.product_name}:{self.status})"
+
+# ============================================================
+#  Referral Settings (إعدادات نظام الإحالة)
+# ============================================================
+class ReferralSettings(Database.BASE):
+    """إعدادات نظام المكافآت - قابلة للتعديل من SQLAdmin."""
+    __tablename__ = 'referral_settings'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    required_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=3, server_default='3'
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default='true'
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        server_default=func.now(), onupdate=func.now()
+    )
+    updated_by: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    def __str__(self):
+        return f"ReferralSettings(count={self.required_count}, active={self.is_active})"
+
+# ============================================================
+#  Currency Rates (أسعار الصرف)
+# ============================================================
+class CurrencyRates(Database.BASE):
+    """أسعار الصرف - قابلة للتعديل من SQLAdmin."""
+    __tablename__ = 'currency_rates'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    usd_to_yer: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2), nullable=False, default=Decimal("533.00"), server_default='533.00'
+    )
+    usd_to_sar: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2), nullable=False, default=Decimal("3.70"), server_default='3.70'
+    )
+    sar_to_yer: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2), nullable=False, default=Decimal("140.00"), server_default='140.00'
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default='true'
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        server_default=func.now(), onupdate=func.now()
+    )
+    updated_by: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    def __str__(self):
+        return f"CurrencyRates(USD-YER={self.usd_to_yer}, USD-SAR={self.usd_to_sar}, SAR-YER={self.sar_to_yer})"
+
+# ============================================================
+#  User Activity Log (سجل نشاط المستخدمين)
+# ============================================================
+class UserActivity(Database.BASE):
+    """سجل كل نشاط مهم يقوم به المستخدم في البوت."""
+    __tablename__ = 'user_activities'
+    __table_args__ = (
+        Index('ix_ua_user_time', 'user_id', 'created_at'),
+        Index('ix_ua_action', 'action_type', 'created_at'),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    username: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    first_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    action_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    action_ar: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    target: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    target_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    details: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
+    )
+
+    def __str__(self):
+        return f"{self.user_id}: {self.action_type} -> {self.target or '-'}"
+
+
+class TopUpRequest(Database.BASE):
+    """طلب شحن رصيد  يراجعه المشرف (تأكيد/تعديل/رفض)."""
+    __tablename__ = "top_up_requests"
+    
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey('users.telegram_id', ondelete="CASCADE"), 
+        nullable=False, index=True
+    )
+    payment_method_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey('payment_methods.id', ondelete="SET NULL"), 
+        nullable=True
+    )
+    amount_requested: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    amount_received: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+    receipt_photo_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", index=True)
+    admin_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    admin_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    reviewed_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    
+    user: Mapped["User"] = relationship("User", lazy='raise')
+    
+    __table_args__ = (
+        Index('ix_topup_status_created', 'status', 'created_at'),
+    )
+    
+    def __str__(self):
+        return f"#{self.id} - {self.amount_requested}$ ({self.status})"
+
+class VerifiedTransaction(Database.BASE):
+    """A Binance Pay / USDT TRC20 transaction ID already used for an auto top-up.
+
+    The unique txid prevents the same transaction from crediting the
+    balance twice. The row also lets an admin recover a credit that was
+    verified but failed to apply.
+    """
+    __tablename__ = "verified_transactions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    txid: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
+    method: Mapped[str] = mapped_column(String(20), nullable=False)  # binance_pay | tron_usdt
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey('users.telegram_id', ondelete="CASCADE"),
+        nullable=False, index=True
+    )
+    amount_usd: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    used_for: Mapped[str] = mapped_column(String(30), nullable=False, default="topup")
+    verified_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    def __str__(self):
+        return f"{self.txid} - {self.amount_usd}$ ({self.method})"
