@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
 
 from sqladmin import Admin, BaseView, ModelView, expose, action
+from sqladmin.filters import ForeignKeyFilter
 from sqladmin.authentication import AuthenticationBackend
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -1506,14 +1507,14 @@ class SupplierProductAdmin(ModelView, model=SupplierProduct):
         SupplierProduct.supplier_id,
         SupplierProduct.name,
         SupplierProduct.category,
+        SupplierProduct.show_in_local,
+        SupplierProduct.is_available,
         SupplierProduct.cost_price,
         SupplierProduct.fixed_profit,
         SupplierProduct.selling_price,
         SupplierProduct.manual_price,
         SupplierProduct.stock,
         SupplierProduct.is_visible,
-        SupplierProduct.show_in_local,
-        SupplierProduct.is_available,
         SupplierProduct.last_synced_at,
     ]
     column_searchable_list = [
@@ -1529,7 +1530,7 @@ class SupplierProductAdmin(ModelView, model=SupplierProduct):
     ]
     column_default_sort = [("id", True)]
     column_filters = [
-        SupplierProduct.supplier_id,
+        ForeignKeyFilter(SupplierProduct.supplier_id, Supplier.name, title="المورد"),
         SupplierProduct.category,
         SupplierProduct.is_visible,
         SupplierProduct.is_available,
