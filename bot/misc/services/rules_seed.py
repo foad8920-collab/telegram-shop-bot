@@ -10,10 +10,11 @@ Rule 4 is unchanged from the adapted text: delivery is through the
 Telegram account or the phone number - there is NO email invite in the
 bot or the store; email belongs to the store's website only.
 
-REPLACE mode, guarded by a sentinel: if rule 1's Arabic text is already
-in the table, nothing is touched, so rules the owner adds later from the
-panel are safe. The function also adds the text_en column if it is
-missing (the model patch adds it too; the raw SQL here works even
+REPLACE mode, guarded by a sentinel: the seeding runs only if the
+no-cash-refund rule is NOT already at position 12 (the middle). Once
+it is there, nothing is touched, so rules the owner adds later from
+the panel are safe. The function also adds the text_en column if it
+is missing (the model patch adds it too; the raw SQL here works even
 before the model is reloaded).
 """
 
@@ -63,6 +64,10 @@ YEMEN_RULES: list[tuple[str, str]] = [
         "The warranty covers only a defect in the delivery itself, during the stated warranty period. It does not cover interruptions of the provider's service, changes to its features, or your misuse.",
     ),
     (
+        "لا يستطيع أي عميل استرداد المبالغ نقدا في حال حصل أي خلل؛ بل تُضاف المبالغ إلى رصيد محفظته في البوت ويستطيع شراء أي منتج آخر بها.",
+        "No customer can receive a cash refund if any problem occurs. Instead, the amount is added to their wallet balance in the bot, and they can use it to buy any other product.",
+    ),
+    (
         "المنتجات الرقمية بعد تسليمها وتفعيلها لا تسترد، ويستثنى من ذلك عدم التسليم أو منتج معيب لم يعمل من الأساس، بعد إثبات ذلك خلال 48 ساعة، ويكون الحل استبدالا أو إضافة المبلغ إلى رصيد محفظة العميل حسب تقدير الإدارة.",
         "Digital products are non-refundable after delivery and activation, except in the case of non-delivery or a product that never worked, proven within 48 hours. The remedy is a replacement or adding the amount to the customer's wallet balance, at management's discretion.",
     ),
@@ -106,18 +111,15 @@ YEMEN_RULES: list[tuple[str, str]] = [
         "الأسعار بالدولار الأمريكي أساسا، وتظهر أيضا بالريال السعودي والريال اليمني حسب سعر الصرف.",
         "Prices are based on US dollars, and are also shown in Saudi riyals and Yemeni riyals according to the exchange rate.",
     ),
-    (
-        "لا يستطيع أي عميل استرداد المبالغ نقدا في حال حصل أي خلل؛ بل تُضاف المبالغ إلى رصيد محفظته في البوت ويستطيع شراء أي منتج آخر بها.",
-        "No customer can receive a cash refund if any problem occurs. Instead, the amount is added to their wallet balance in the bot, and they can use it to buy any other product.",
-    ),
 ]
 
-# Sentinel: rule 23's Arabic text. It MUST be a rule that does not exist
-# in the old 18 rules - rule 1 cannot be the sentinel, because the old
-# rule 1 is word-for-word identical to the new rule 1 (both name the
-# Yemen platform), so the v1.0 seeding wrongly thought the 23 were
-# already there and skipped, leaving the old 18 rules with no English.
-RULE_23_AR = YEMEN_RULES[22][0]
+# Sentinel: the no-cash-refund rule's Arabic text AND its position
+# (12, the middle). The text alone is not enough any more: the rule
+# already exists in the DB (it was rule 23), so a text-only check
+# would wrongly skip the reorder. The (text, sort_order) pair is
+# true only after the reorder has been applied.
+NO_REFUND_AR = "لا يستطيع أي عميل استرداد المبالغ نقدا في حال حصل أي خلل؛ بل تُضاف المبالغ إلى رصيد محفظته في البوت ويستطيع شراء أي منتج آخر بها."
+NO_REFUND_SORT = 12
 
 
 async def ensure_yemen_rules_seeded() -> None:
@@ -140,8 +142,10 @@ async def ensure_yemen_rules_seeded() -> None:
             _sql_text("ALTER TABLE bot_rules ADD COLUMN IF NOT EXISTS text_en TEXT")
         )
         found = await session.execute(
-            _sql_text("SELECT 1 FROM bot_rules WHERE text = :t LIMIT 1"),
-            {"t": RULE_23_AR},
+            _sql_text(
+                "SELECT 1 FROM bot_rules WHERE text = :t AND sort_order = :s LIMIT 1"
+            ),
+            {"t": NO_REFUND_AR, "s": NO_REFUND_SORT},
         )
         if found.scalar() is not None:
             await session.commit()

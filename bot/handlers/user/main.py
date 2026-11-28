@@ -21,7 +21,7 @@ from bot.keyboards import main_menu, back, profile_keyboard, check_sub, language
 from bot.keyboards.inline import profile_keyboard_async, welcome_after_check_keyboard
 from bot.misc import EnvKeys
 from bot.misc.metrics import get_metrics
-from bot.i18n import localize, set_current_locale, set_user_cache_locale, SUPPORTED_LOCALES
+from bot.i18n import localize, set_current_locale, set_user_cache_locale, SUPPORTED_LOCALES, get_current_locale
 from bot.logger_mesh import logger
 
 router = Router()
@@ -525,6 +525,7 @@ async def rules_callback_handler(call: CallbackQuery, state: FSMContext):
     from sqlalchemy import select as _select
 
     rules_text = ""
+    chunks = []
     try:
         async with _DB().session() as session:
             result = await session.execute(
@@ -532,20 +533,59 @@ async def rules_callback_handler(call: CallbackQuery, state: FSMContext):
             )
             rules = list(result.scalars().all())
             if rules:
-                lines = []
+                locale = get_current_locale()
+                # The current locale is not always restored to the
+                # user's saved language for a later update, so also
+                # read the saved language from the DB (source of
+                # truth). If either source says English, show English.
+                try:
+                    from bot.database.models.main import User as _User
+                    _u = (await session.execute(
+                        _select(_User).where(_User.telegram_id == call.from_user.id)
+                    )).scalar_one_or_none()
+                    if _u is not None and ((_u.language_code or "").strip().lower()[:2]) == "en":
+                        locale = "en"
+                except Exception:
+                    pass
+                title = "📜 Rules" if locale == "en" else "📜 القوانين"
+                sep = "=" * 20
+                blocks = []
                 for i, r in enumerate(rules, start=1):
-                    lines.append(f"{i}. {_esc((r.text or '').strip())}")
-                rules_text = " القوانين" + NL + NL + (NL + NL).join(lines)
+                    text = (r.text_en or "").strip() if locale == "en" else ""
+                    if not text:
+                        text = (r.text or "").strip()
+                    blocks.append(f"{i}. {_esc(text)}")
+                # Pack whole rules into messages that fit Telegram's
+                # 4000-char safe limit (separator between rules).
+                chunks = []
+                current = title
+                for block in blocks:
+                    if current == title:
+                        piece = NL + NL + block
+                    else:
+                        piece = NL + NL + sep + NL + NL + block
+                    if len(current) + len(piece) > 4000 and current != title:
+                        chunks.append(current)
+                        current = title + NL + NL + block
+                    else:
+                        current += piece
+                chunks.append(current)
     except Exception:
         rules_text = ""
-    if not rules_text:
-        rules_text = EnvKeys.RULES
-    if rules_text:
-        if len(rules_text) > 4000:
-            rules_text = rules_text[:3990] + "..."
-        await call.message.edit_text(rules_text, reply_markup=back("back_to_menu"))
+        chunks = []
+    if chunks:
+        await call.message.edit_text(chunks[0], reply_markup=back("back_to_menu"))
+        for chunk in chunks[1:]:
+            await call.message.answer(chunk, reply_markup=back("back_to_menu"))
     else:
-        await call.answer(localize("rules.not_set"))
+        if not rules_text:
+            rules_text = EnvKeys.RULES
+        if rules_text:
+            if len(rules_text) > 4000:
+                rules_text = rules_text[:3990] + "..."
+            await call.message.edit_text(rules_text, reply_markup=back("back_to_menu"))
+        else:
+            await call.answer(localize("rules.not_set"))
     await state.clear()
 
 
