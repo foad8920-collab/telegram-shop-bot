@@ -477,7 +477,7 @@ async def sync_supplier(supplier_id: int, *, manual: bool = False, bot=None) -> 
                 for _ev in events:
                     try:
                         await _send_update(bot, await _format_update(_ev), reply_markup=_buy_keyboard(_ev.get("supplier_id"), _ev.get("product_id")))
-                        await asyncio.sleep(3)
+                        await asyncio.sleep(5)
                     except Exception as _pe:
                         logger.warning("Updates post failed: %s", _pe)
             else:
@@ -487,7 +487,7 @@ async def sync_supplier(supplier_id: int, *, manual: bool = False, bot=None) -> 
                     for _ev in events:
                         try:
                             await _send_update(_tmp_bot, await _format_update(_ev), reply_markup=_buy_keyboard(_ev.get("supplier_id"), _ev.get("product_id")))
-                            await asyncio.sleep(3)
+                            await asyncio.sleep(5)
                         except Exception as _pe:
                             logger.warning("Updates post failed: %s", _pe)
         except Exception as _e:
